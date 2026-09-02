@@ -1,7 +1,8 @@
 import { T, TILE } from '../sim/types';
 import type { Game, Building } from '../sim/types';
-import { insideBuilding } from '../sim/world';
+import { insideBuilding, VROADS, HROADS } from '../sim/world';
 import { hourOf, civById, offById } from '../sim/agents';
+import { WEAPONS } from '../sim/data';
 
 export interface RenderOpts {
   layers: { trust: boolean; crime: boolean; hoods: boolean; incidents: boolean; units: boolean };
@@ -54,6 +55,40 @@ export function buildBase(g: Game) {
         c.fillStyle = '#746a5e';
         if ((tx + ty) % 2 === 0) c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
       }
+    }
+  }
+  // crosswalk zebras where sidewalk lines cross the roads
+  c.fillStyle = '#b9b9be';
+  for (const vc of VROADS) for (const hr of HROADS) {
+    for (const cx of [vc, vc + 1]) {
+      for (let s = 2; s < TILE - 2; s += 4) { // above + below the intersection
+        c.fillRect(cx * TILE + s, (hr - 1) * TILE + 4, 2, 8);
+        c.fillRect(cx * TILE + s, (hr + 2) * TILE + 4, 2, 8);
+      }
+    }
+    for (const cy of [hr, hr + 1]) {
+      for (let s = 2; s < TILE - 2; s += 4) { // left + right of the intersection
+        c.fillRect((vc - 1) * TILE + 4, cy * TILE + s, 8, 2);
+        c.fillRect((vc + 2) * TILE + 4, cy * TILE + s, 8, 2);
+      }
+    }
+  }
+  // street furniture
+  for (const p of g.world.props) {
+    if (p.kind === 'bench') {
+      c.fillStyle = '#6b4a2e';
+      c.fillRect(p.x - 6, p.y - 2, 12, 4);
+      c.fillStyle = '#4a3420';
+      c.fillRect(p.x - 5, p.y + 2, 2, 2); c.fillRect(p.x + 3, p.y + 2, 2, 2);
+    } else if (p.kind === 'hydrant') {
+      c.fillStyle = '#a03030';
+      c.fillRect(p.x - 2, p.y - 3, 4, 6);
+      c.fillRect(p.x - 3, p.y - 1, 6, 2);
+    } else if (p.kind === 'lamp') {
+      c.fillStyle = '#55555c';
+      c.fillRect(p.x - 1, p.y - 8, 2, 10);
+      c.fillStyle = '#8a8a70';
+      c.fillRect(p.x - 2, p.y - 10, 4, 3);
     }
   }
   // road markings
@@ -168,6 +203,13 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
       ctx.strokeStyle = '#7fb0ff'; ctx.lineWidth = 2;
       ctx.strokeRect(b.x * TILE + 3, b.y * TILE + 3, b.w * TILE - 6, b.h * TILE - 6);
     }
+    // storefront awning over the door
+    if (b.kind === 'store' || b.kind === 'shop' || b.kind === 'bar') {
+      ctx.fillStyle = b.kind === 'bar' ? '#7a4dab' : b.kind === 'store' ? '#c0553a' : '#3e9e9e';
+      for (let s = 0; s < 3; s++) {
+        ctx.fillRect(b.door.x * TILE - 6 + s * 10, b.door.y * TILE + (b.door.y > b.y ? 12 : 0), 8, 4);
+      }
+    }
     // door marker
     ctx.fillStyle = '#c9a86b';
     ctx.fillRect(b.door.x * TILE + 4, b.door.y * TILE + 4, 8, 8);
@@ -226,6 +268,30 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
   if (dark > 0.01) {
     ctx.fillStyle = `rgba(10,14,40,${dark})`;
     ctx.fillRect(cam.x - W / cam.zoom, cam.y - H / cam.zoom, (W * 2) / cam.zoom, (H * 2) / cam.zoom);
+    // street lamps glow through the dark
+    for (const p of g.world.props) {
+      if (p.kind !== 'lamp') continue;
+      ctx.fillStyle = `rgba(255,214,130,${0.13 * (dark / 0.45)})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y - 8, 26, 0, 7); ctx.fill();
+      ctx.fillStyle = `rgba(255,236,170,${0.85 * (dark / 0.45)})`;
+      ctx.fillRect(p.x - 2, p.y - 10, 4, 3);
+    }
+  }
+
+  // aim line while directly controlling with a drawn weapon
+  const co = offById(g, g.control);
+  if (co && co.drawn && co.weapon && co.vehicle === null && g.aim) {
+    const wd = WEAPONS[co.weapon];
+    const d = Math.hypot(g.aim.x - co.x, g.aim.y - co.y) || 1;
+    const r = Math.min(d, wd.range);
+    ctx.strokeStyle = 'rgba(255,120,120,0.35)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath();
+    ctx.moveTo(co.x, co.y);
+    ctx.lineTo(co.x + ((g.aim.x - co.x) / d) * r, co.y + ((g.aim.y - co.y) / d) * r);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   ctx.restore();
@@ -290,9 +356,28 @@ function drawEntities(g: Game, ctx: CanvasRenderingContext2D, revealed: Set<numb
       continue;
     }
     drawPerson(ctx, c.x, c.y - personBob(c), c.color, c.skin, false);
+    if (c.dog) {
+      const bob2 = personBob(c);
+      ctx.fillStyle = '#6b4a2e';
+      ctx.fillRect(c.x - 9, c.y + 1 - bob2, 6, 3);
+      ctx.fillRect(c.x - 10, c.y - 1 - bob2, 3, 3); // head
+      ctx.fillRect(c.x - 4, c.y - 1 - bob2, 1, 2);  // tail
+    }
     if (c.drawn) {
       ctx.fillStyle = '#111';
       ctx.fillRect(c.x + 2, c.y - 2, 4, 2);
+    }
+    if (c.state === 'hostile') {
+      ctx.fillStyle = '#ff5050';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText('!', c.x - 2, c.y - 12);
+    } else if (c.emote && g.time < (c.emoteUntil ?? 0)) {
+      ctx.fillStyle = 'rgba(240,240,245,0.92)';
+      ctx.fillRect(c.x + 3, c.y - 17, 11, 9);
+      ctx.fillRect(c.x + 4, c.y - 8, 3, 2);
+      ctx.fillStyle = '#22242c';
+      ctx.font = '7px monospace';
+      ctx.fillText(c.emote, c.x + 5, c.y - 10);
     }
     if (c.state === 'surrender') {
       ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.fillText('✋', c.x - 3, c.y - 8);

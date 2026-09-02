@@ -95,6 +95,9 @@ export interface Civilian extends Armed {
   lodTick: number;
   known?: { idShown?: boolean; warrant?: boolean };
   warrant: boolean;
+  dog?: boolean;
+  emote?: string;
+  emoteUntil?: number;
 }
 
 export type OfficerState =
@@ -218,6 +221,8 @@ export interface Cheats {
   usedEver: boolean;
 }
 
+export interface Prop { kind: 'bench' | 'hydrant' | 'lamp'; x: number; y: number }
+
 export interface World {
   seed: number;
   w: number; h: number;
@@ -227,6 +232,7 @@ export interface World {
   stationId: number;
   bankId: number;
   storeIds: number[];
+  props: Prop[];
 }
 
 export interface Game {
@@ -253,4 +259,5 @@ export interface Game {
   policy: Policy;
   notify: (text: string, cls: string, x?: number, y?: number) => void;
   sfx?: (type: string, x?: number, y?: number) => void;
+  aim: { x: number; y: number } | null; // world-space aim point while directly controlling
 }

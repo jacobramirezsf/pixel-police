@@ -1,7 +1,7 @@
 import { T, TILE } from './types';
 import type { Game, Civilian, Officer, Vehicle, Pt, World } from './types';
 import { WEAPONS, FIRST, LAST, OFFICER_TRAITS, CIV_COLORS, SKIN, CAR_COLORS } from './data';
-import { rng, ri, pick, findPath, walkCost, driveCost, tileAt, px2t, randomSidewalkPoint, randomRoadPoint, stationDoor, stationLot, hoodAt } from './world';
+import { rng, ri, pick, findPath, walkCost, driveCost, tileAt, px2t, randomSidewalkPoint, randomRoadPoint, stationDoor, stationLot, hoodAt, insideBuilding, GW, GH } from './world';
 import { onOfficerArrive, reportShots } from './incidents';
 import { updateCombatant } from './combat';
 import { addLog } from './dept';
@@ -38,6 +38,7 @@ export function makeCivilian(g: Game, x: number, y: number, hood: number): Civil
     detainedBy: null, waitUntil: 0, lodTick: rng() * 2,
     weapon: null, ammo: 0, reserve: 0, drawn: false, cooldown: 0, reloading: 0,
     warrant: rng() < 0.05,
+    dog: rng() < 0.12,
   };
   if (c.lawful < 0.45 && rng() < 0.35) { // some carry concealed
     c.weapon = pick(['chandgun', 'revolver', 'knife']);
@@ -54,7 +55,7 @@ export function makeOfficer(g: Game, atStation = true): Officer {
   const o: Officer = {
     id: g.nextId++, kind: 'off', name: `Ofc. ${name2()}`,
     x: sd.x + ri(-10, 10), y: sd.y + ri(-6, 20),
-    state: 'idle', path: null, target: null, speed: 42,
+    state: 'idle', path: null, target: null, speed: 55,
     shooting: 0.35 + rng() * 0.45, driving: 0.3 + rng() * 0.6, talk: 0.3 + rng() * 0.6,
     trait: pick(OFFICER_TRAITS), morale: 70 + ri(-10, 15), fatigue: 0,
     hp: 100, injury: 'healthy', hospitalUntil: 0, incident: null, vehicle: null,
@@ -71,7 +72,7 @@ export function makeVehicle(g: Game, police: boolean, x: number, y: number): Veh
   const v: Vehicle = {
     id: g.nextId++, kind: 'veh', police,
     name: police ? `Unit ${g.vehicles.filter(q => q.police).length + 1}` : 'Car',
-    x, y, angle: 0, speed: 0, maxSpeed: police ? 150 : 105,
+    x, y, angle: 0, speed: 0, maxSpeed: police ? 175 : 105,
     color: police ? '#1d1d24' : pick(CAR_COLORS),
     driver: null, passengers: [], lights: false, path: null, target: null,
     parked: true, home: { x, y }, hp: 100, stolen: false,
@@ -117,6 +118,14 @@ export function moveAlong(e: { x: number; y: number; path: Pt[] | null; speed?: 
   return e.path.length === 0;
 }
 
+function randomParkPoint(w: World): Pt | null {
+  for (let i = 0; i < 80; i++) {
+    const tx = ri(2, GW - 3), ty = ri(2, GH - 3);
+    if (tileAt(w, tx, ty) === T.PARK) return { x: tx * TILE + 8, y: ty * TILE + 8 };
+  }
+  return null;
+}
+
 // ---------- civilian AI ----------
 export function updateCivilian(g: Game, c: Civilian, dts: number) {
   if (c.injury === 'dead') { c.state = 'down'; return; }
@@ -158,12 +167,37 @@ export function updateCivilian(g: Game, c: Civilian, dts: number) {
       return;
     }
     default: { // idle — decide something
-      if (g.time < c.waitUntil) return;
-      // LOD: cheap decision
+      if (g.time < c.waitUntil) {
+        // hanging out: hum along at the bar
+        if (rng() < 0.008) {
+          const b = insideBuilding(g.world, c.x, c.y);
+          if (b && b.kind === 'bar') { c.emote = '♪'; c.emoteUntil = g.time + 2; }
+        }
+        return;
+      }
       const h = hourOf(g.time);
+      // stop and chat with someone standing nearby
+      if (rng() < 0.22) {
+        const buddy = g.civs.find(q => q !== c && q.state === 'idle' && q.x > 0 && q.incident === null &&
+          Math.abs(q.x - c.x) < 30 && Math.abs(q.y - c.y) < 30);
+        if (buddy) {
+          const until = g.time + ri(3, 9);
+          c.waitUntil = until; buddy.waitUntil = Math.max(buddy.waitUntil, until);
+          c.emote = '…'; c.emoteUntil = until;
+          buddy.emote = '…'; buddy.emoteUntil = until;
+          return;
+        }
+      }
+      // sometimes just go sit in the park a while
+      if (rng() < 0.12) {
+        const p = randomParkPoint(g.world);
+        if (p && setPath(g, c, p)) { c.state = 'walk'; c.waitUntil = g.time + ri(10, 25); return; }
+      }
       let destB = -1;
+      const bars = g.world.buildings.filter(b => b.kind === 'bar');
       if (c.work >= 0 && h >= 8 && h < 17 && rng() < 0.6) destB = c.work;
-      else if ((h >= 21 || h < 6) && c.home >= 0 && rng() < 0.75) destB = c.home;
+      else if ((h >= 19 || h < 2) && bars.length && rng() < 0.3) destB = pick(bars).id;
+      else if ((h >= 21 || h < 6) && c.home >= 0 && rng() < 0.6) destB = c.home;
       else if (rng() < 0.25 && g.world.storeIds.length) destB = pick(g.world.storeIds);
       if (destB >= 0) {
         const b = g.world.buildings.find(q => q.id === destB);
@@ -191,6 +225,7 @@ export function panicNear(g: Game, x: number, y: number, radius: number, police:
     if (d > radius) continue;
     witnesses++;
     c.fear = Math.min(1, c.fear + 0.6);
+    c.emote = '!'; c.emoteUntil = g.time + 3;
     if (c.incident === null && c.state !== 'crime') {
       // run away from the point
       const ang = Math.atan2(c.y - y, c.x - x) + (rng() - 0.5);
@@ -302,12 +337,12 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
           break;
         } else {
           if (!o.path || o.path.length === 0) setPath(g, o, { x: car.x, y: car.y });
-          moveAlong(o, dts, o.speed * 1.5);
+          moveAlong(o, dts, o.speed * 1.7);
           break;
         }
       }
       if (!o.path) setPath(g, o, { x: inc.x, y: inc.y });
-      if (moveAlong(o, dts, o.speed * 1.5) || dist(o, inc) < 26) {
+      if (moveAlong(o, dts, o.speed * 1.7) || dist(o, inc) < 26) {
         o.state = 'onscene'; o.path = null;
         onOfficerArrive(g, o, inc);
       }
@@ -344,7 +379,7 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
         }
       } else {
         if (!o.path || o.path.length === 0 || rng() < 0.1) setPath(g, o, { x: s.x, y: s.y });
-        moveAlong(o, dts, o.speed * 1.6);
+        moveAlong(o, dts, o.speed * 1.8);
         // only actual fleers keep sprinting away; a person walking normally just gets approached
         if (s.state === 'flee') {
           if ((!s.path || s.path.length === 0)) {
@@ -354,7 +389,7 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
             to.y = Math.max(TILE, Math.min(g.world.h * TILE - TILE, to.y));
             setPath(g, s, to);
           }
-          moveAlong(s, dts, s.speed * 1.9);
+          moveAlong(s, dts, s.speed * 1.55);
         }
       }
       break;
@@ -503,8 +538,9 @@ function aiDrive(g: Game, v: Vehicle, dts: number, targetSpeed: number, reckless
     const anyV = v as any;
     if (v.speed < 3 && targetSpeed === 0) {
       anyV.stuckFor = (anyV.stuckFor ?? 0) + dts;
+      if (anyV.stuckFor > 3 && !anyV.honked) { anyV.honked = true; g.sfx?.('honk', v.x, v.y); }
       if (anyV.stuckFor > 4) targetSpeed = 18;
-    } else anyV.stuckFor = 0;
+    } else { anyV.stuckFor = 0; anyV.honked = false; }
   }
   v.speed += Math.sign(targetSpeed - v.speed) * Math.min(Math.abs(targetSpeed - v.speed), 160 * dts);
   const wp = v.path[0];

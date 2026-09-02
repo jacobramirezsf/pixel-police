@@ -72,6 +72,16 @@ export function sfx(type: string, vol = 1) {
       o.start(t); o.stop(t + 0.15);
       break;
     }
+    case 'honk': {
+      const o = ctx.createOscillator(); o.type = 'square';
+      o.frequency.setValueAtTime(310, t);
+      o.connect(out);
+      out.gain.setValueAtTime(0.05 * vol, t);
+      out.gain.setValueAtTime(0.05 * vol, t + 0.12);
+      out.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      o.start(t); o.stop(t + 0.16);
+      break;
+    }
     case 'alarm': { // priority-3 alert
       const o = ctx.createOscillator(); o.type = 'sawtooth';
       o.frequency.setValueAtTime(880, t);

@@ -10,7 +10,7 @@ import {
 } from './sim/agents';
 import { crimeTick, updateIncidents, assignOfficer, spawnIncidentType, resolveIncident, dispatchNearestOfficer, spawnPursuit } from './sim/incidents';
 import { updateDept, addLog, HIRE_COST, CAR_COST } from './sim/dept';
-import { fireAt, reload as reloadWeaponFn, applyDamage } from './sim/combat';
+import { fireAt, fireAtPoint, reload as reloadWeaponFn, applyDamage } from './sim/combat';
 import { buildBase, draw } from './render/render';
 import type { RenderOpts } from './render/render';
 import { initUI, addAlert, refreshPanel, refreshHUD, refreshCtxBar, refreshControlHud, setTab, getTab } from './ui/ui';
@@ -38,9 +38,10 @@ function newGameState(seed: number): Game {
     cam: { x: 0, y: 0, zoom: 2 },
     dayPaid: -1, protestUntil: 0, protestHood: 0,
     policy: { autoDispatch: 'off' },
+    aim: null,
     notify: (t, c, x, y) => addAlert(t, c, x, y),
   };
-  spawnPopulation(g, 140, 14);
+  spawnPopulation(g, 190, 20);
   for (let i = 0; i < 4; i++) makeOfficer(g);
   const sd = stationDoor(g.world);
   g.cam.x = sd.x; g.cam.y = sd.y;
@@ -84,6 +85,9 @@ function clampCam() {
 // ================= input state =================
 const keys = new Set<string>();
 const joy = { active: false, dx: 0, dy: 0, pid: -1 };
+let firing = false;
+let firePid = -1;
+let aimScreen: { x: number; y: number } | null = null;
 let panPointer: { id: number; sx: number; sy: number; camX: number; camY: number; moved: boolean } | null = null;
 const pinch = new Map<number, { x: number; y: number }>();
 let pinchDist0 = 0, pinchZoom0 = 1;
@@ -415,12 +419,21 @@ canvas.addEventListener('pointerdown', (e) => {
     pinchDist0 = Math.hypot(a.x - b.x, a.y - b.y);
     pinchZoom0 = g.cam.zoom;
     panPointer = null;
+    firing = false;
+    return;
+  }
+  // direct control + drawn weapon: press-and-hold anywhere = open fire at that point
+  const co = offById(g, g.control);
+  if (co && co.drawn && co.weapon && co.vehicle === null) {
+    firing = true; firePid = e.pointerId;
+    aimScreen = { x: e.clientX, y: e.clientY };
     return;
   }
   panPointer = { id: e.pointerId, sx: e.clientX, sy: e.clientY, camX: g.cam.x, camY: g.cam.y, moved: false };
 });
 
 canvas.addEventListener('pointermove', (e) => {
+  if (g.control !== null) aimScreen = { x: e.clientX, y: e.clientY };
   if (pinch.has(e.pointerId)) pinch.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pinch.size === 2) {
     const [a, b] = [...pinch.values()];
@@ -441,6 +454,7 @@ canvas.addEventListener('pointermove', (e) => {
 
 canvas.addEventListener('pointerup', (e) => {
   pinch.delete(e.pointerId);
+  if (e.pointerId === firePid) { firing = false; firePid = -1; }
   if (!panPointer || e.pointerId !== panPointer.id) return;
   const wasTap = !panPointer.moved;
   panPointer = null;
@@ -448,7 +462,11 @@ canvas.addEventListener('pointerup', (e) => {
   const p = screenToWorld(e.clientX, e.clientY);
   handleTap(p, e.shiftKey);
 });
-canvas.addEventListener('pointercancel', (e) => { pinch.delete(e.pointerId); if (panPointer?.id === e.pointerId) panPointer = null; });
+canvas.addEventListener('pointercancel', (e) => {
+  pinch.delete(e.pointerId);
+  if (panPointer?.id === e.pointerId) panPointer = null;
+  if (e.pointerId === firePid) { firing = false; firePid = -1; }
+});
 
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
@@ -462,14 +480,7 @@ canvas.addEventListener('wheel', (e) => {
 
 function handleTap(p: Pt, additive: boolean) {
   if (renderOpts.cleanView) return;
-  const co = offById(g, g.control);
-  if (co) {
-    // direct control: tap = fire (if drawn) at nearby entity
-    if (co.drawn && co.weapon && co.vehicle === null) {
-      firePoint(co, p);
-    }
-    return;
-  }
+  if (g.control !== null) return; // firing is handled by press-and-hold; other actions via buttons/keys
   // hit test: officers > vehicles > incidents > civilians
   const off = g.officers.filter(o => o.x > 0 && o.vehicle === null).sort((a, b) => dist(a, p) - dist(b, p))[0];
   if (off && dist(off, p) < 12) {
@@ -517,19 +528,6 @@ function handleTap(p: Pt, additive: boolean) {
   if (!api.multiSelectMode) { api.deselect(); }
 }
 
-function firePoint(o: Officer, p: Pt) {
-  const w = WEAPONS[o.weapon!];
-  // find entity near tap
-  const targets: (Civilian | Officer)[] = [...g.civs.filter(c => c.x > 0 && c.injury !== 'dead'), ...g.officers.filter(q => q.id !== o.id && q.x > 0)];
-  targets.sort((a, b) => dist(a, p) - dist(b, p));
-  const t = targets[0];
-  if (t && dist(t, p) < 14 && dist(o, t) < w.range * 1.3) {
-    fireAt(g, o, t);
-  } else {
-    addAlert('No target there', 'warn');
-  }
-  refreshControlHud();
-}
 
 // ================= joystick =================
 const joyEl = document.getElementById('joystick')!;
@@ -582,7 +580,12 @@ window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
 // ================= direct control integration =================
 function updatePlayerControl(dts: number) {
   const o = offById(g, g.control);
-  if (!o) return;
+  if (!o) { g.aim = null; firing = false; return; }
+  // aim point + held-trigger free fire
+  g.aim = aimScreen && o.vehicle === null ? screenToWorld(aimScreen.x, aimScreen.y) : null;
+  if (firing && dts > 0 && o.drawn && o.weapon && o.vehicle === null && g.aim) {
+    fireAtPoint(g, o, g.aim.x, g.aim.y);
+  }
   if (o.injury === 'dead' || o.injury === 'incap') {
     addAlert(`${o.name} is down!`, 'bad');
     api.releaseControl();
@@ -749,7 +752,7 @@ try {
         <h2>PIXEL POLICE DEPARTMENT</h2>
         <p>A little city is living its life. You run its police department — 4 officers, 2 cars, one budget.</p>
         <p><b>Dispatch:</b> calls come in with incomplete information. Tap an alert to jump there, tap an incident and SEND a unit.</p>
-        <p><b>Get personal:</b> select an officer and hit CONTROL to walk, drive, question, and arrest — or fight, if it comes to that.</p>
+        <p><b>Get personal:</b> select an officer and hit CONTROL to walk, drive, question, and arrest. Draw your weapon and press-and-hold anywhere to fire — every round is real, and so is everything it hits.</p>
         <p><b>It all counts:</b> missed calls, wrongful arrests, and stray bullets follow you. SANDBOX has cheats when you just want chaos.</p>
         <button id="ob-go">START SHIFT</button>
       </div>`;

@@ -55,6 +55,15 @@ Playwright (borrow install from `../open-collections/node_modules/playwright`),
 - **Polish**: onboarding overlay (localStorage `pp.seen`), queued-call badge on DISPATCH tab, muzzle flashes, blood pools, night headlight cones, roof skylights, walk bob, incident labels at zoom ≥1.5.
 - **Bugs fixed**: officers no longer lock into `combat` against fistfights (nearestHostile is `hostile`-only); the intermittent crimeTick crash was `find(q => q.id === pick(storeIds))` re-picking per element (~36% miss) — pick hoisted; city gen now guarantees ≥2 stores; traffic got front-hemisphere braking + deadlock creep.
 
+## Pass 3 (feel + free fire, Sep 2 2026 response to Jacob's playtest)
+
+Jacob's feedback: controls clunky, incidents too fast to respond to, world not alive, shooting too restricted.
+
+- **Free fire**: `fireAtPoint` in combat.ts — press-and-hold anywhere fires real rays with spread; rounds stop on walls/trees, hit whoever is in the path (bystanders and other officers included), targets nothing. Old tap-near-a-target restriction and "No target there" removed. Aim line renders while drawn (`g.aim`). Held pointer autofires at weapon rate; pinch cancels fire.
+- **Pacing overhaul**: crime chance `dts * 0.03 * (1+pressure)` with 8-game-min gap + 4-active cap (≈1 call/30s real at 1x, verified 60s soak: 2 calls, 0 missed). Queue timeouts 25/45/90 game-min by priority. Escalations 9-18 min. Scene assessment 6-11s. Pursuit yield 5s heat / 40 min escape. Officers speed 55 (respond ×1.7), police cars 175.
+- **Liveliness**: 190 civs + 20 cars; crosswalk zebras, benches/hydrants/lampposts (`world.props`, lamps glow at night); chat "…" pairs, bar "♪", panic "!" emotes; dog walkers (12%); park loitering; bar trips 19:00-02:00; stuck-car honks.
+- Debug note: an "impossible" miss streak in hit testing was bullets legitimately stopping on tree tiles / crowd bodies — check the ray environment before suspecting the math.
+
 ## Deploy
 
 GitHub Pages via `.github/workflows/ci.yml` (same as PixelWar): push to main → typecheck, build, deploy.

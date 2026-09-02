@@ -188,15 +188,15 @@ export function los(w: World, x1: number, y1: number, x2: number, y2: number): b
 }
 
 // ---------- city generation ----------
-const VROADS = [8, 24, 40, 56, 72, 88];
-const HROADS = [8, 24, 40, 56];
+export const VROADS = [8, 24, 40, 56, 72, 88];
+export const HROADS = [8, 24, 40, 56];
 
 export function generateCity(seed: number): World {
   setRng(seed);
   const w: World = {
     seed, w: GW, h: GH,
     tiles: new Uint8Array(GW * GH).fill(T.GRASS),
-    buildings: [], hoods: [], stationId: -1, bankId: -1, storeIds: [],
+    buildings: [], hoods: [], stationId: -1, bankId: -1, storeIds: [], props: [],
   };
 
   // neighborhoods (quadrants)
@@ -325,6 +325,22 @@ export function generateCity(seed: number): World {
       if (tileAt(w, tx, ty) === T.GRASS) setTile(w, tx, ty, T.TREE);
     }
   });
+
+  // street furniture: lampposts at intersection corners, hydrants + benches along sidewalks
+  for (const c of VROADS) for (const r of HROADS) {
+    w.props.push({ kind: 'lamp', x: (c - 1) * TILE + 8, y: (r - 1) * TILE + 8 });
+    w.props.push({ kind: 'lamp', x: (c + 2) * TILE + 8, y: (r + 2) * TILE + 8 });
+  }
+  let benchN = 0, hydN = 0;
+  for (let i = 0; i < 400 && (benchN < 14 || hydN < 12); i++) {
+    const tx = ri(2, GW - 3), ty = ri(2, GH - 3);
+    const t = tileAt(w, tx, ty);
+    if (t === T.PARK && benchN < 14) { w.props.push({ kind: 'bench', x: tx * TILE + 8, y: ty * TILE + 8 }); benchN += 2; }
+    else if (t === T.SIDEWALK) {
+      if (hydN < 12 && rng() < 0.4) { w.props.push({ kind: 'hydrant', x: tx * TILE + 8, y: ty * TILE + 8 }); hydN++; }
+      else if (benchN < 14 && rng() < 0.2) { w.props.push({ kind: 'bench', x: tx * TILE + 8, y: ty * TILE + 8 }); benchN++; }
+    }
+  }
 
   // guarantee the city has at least a couple of stores (crime + errands need them)
   if (w.storeIds.length < 2) {

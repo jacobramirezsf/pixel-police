@@ -1,7 +1,7 @@
 import { TILE, T } from './types';
 import type { Game, Civilian, Officer } from './types';
 import { WEAPONS } from './data';
-import { rng, los, tileAt, px2t, blocksMove, findPath, walkCost } from './world';
+import { rng, los, tileAt, px2t, blocksMove, blocksSight, findPath, walkCost } from './world';
 import { dist, panicNear, offById, civById, moveAlong } from './agents';
 import { reportShots } from './incidents';
 import { recordCasualty, addLog } from './dept';
@@ -85,6 +85,70 @@ export function fireAt(g: Game, shooter: Fighter, tgt: Fighter) {
       c !== tgt && pointNearSegment(c.x, c.y, shooter.x, shooter.y, tgt.x, tgt.y, 14));
     if (victim && los(g.world, shooter.x, shooter.y, victim.x, victim.y)) {
       applyDamage(g, victim, wd.dmg * (0.6 + rng() * 0.5), shooter, wd.lethal, true);
+    }
+  }
+}
+
+/** Free fire toward an arbitrary point — no target lock, ray finds whatever is in the way. */
+export function fireAtPoint(g: Game, shooter: Fighter, tx: number, ty: number) {
+  if (!shooter.weapon || shooter.reloading > 0 || shooter.cooldown > 0) return;
+  const wd = WEAPONS[shooter.weapon];
+  const inf = isOfficer(shooter) && g.cheats.infAmmo;
+  if (wd.cls === 'melee') {
+    // swing toward the point
+    const ang0 = Math.atan2(ty - shooter.y, tx - shooter.x);
+    shooter.cooldown = 1 / wd.rof;
+    const cands0: Fighter[] = [...g.civs, ...g.officers.filter(o => o !== shooter)];
+    const hit = cands0.find(c => c.x > 0 && c.injury !== 'dead' &&
+      dist(shooter, c) < wd.range + 8 &&
+      Math.abs(Math.atan2(c.y - shooter.y, c.x - shooter.x) - ang0) < 0.9);
+    if (hit && rng() < wd.acc) applyDamage(g, hit, wd.dmg * (0.7 + rng() * 0.6), shooter, false);
+    return;
+  }
+  if (shooter.ammo <= 0 && !inf) { reload(g, shooter); return; }
+  shooter.cooldown = 1 / wd.rof;
+  if (!inf) { shooter.ammo--; if (shooter.ammo <= 0) reload(g, shooter); }
+
+  // direction + spread
+  let ang = Math.atan2(ty - shooter.y, tx - shooter.x);
+  ang += (rng() - 0.5) * (1 - wd.acc) * 0.3;
+  const maxD = wd.range * 1.15;
+  const skill = isOfficer(shooter) ? 0.75 + (shooter as Officer).shooting * 0.5 : 0.85;
+  const cands: Fighter[] = [
+    ...g.civs.filter(c => c.x > 0 && c.state !== 'arrested' && c.injury !== 'dead'),
+    ...g.officers.filter(o => o !== shooter && o.x > 0 && o.vehicle === null && o.injury !== 'dead'),
+  ];
+  let ex = shooter.x, ey = shooter.y;
+  let victim: Fighter | null = null;
+  for (let d = 6; d <= maxD; d += 4) {
+    ex = shooter.x + Math.cos(ang) * d;
+    ey = shooter.y + Math.sin(ang) * d;
+    if (blocksSight(tileAt(g.world, px2t(ex), px2t(ey)))) break; // round hits a wall
+    const idx = cands.findIndex(c => Math.hypot(c.x - ex, c.y - ey) < 6.5);
+    if (idx >= 0) {
+      const c = cands[idx];
+      const rangeMod = Math.max(0.4, 1 - d / (wd.range * 1.5));
+      if (rng() < wd.acc * skill * rangeMod * 1.15 * coverMod(g, c)) { victim = c; break; }
+      cands.splice(idx, 1); // round snapped past them — keep flying
+    }
+  }
+  g.shots.push({ x1: shooter.x, y1: shooter.y, x2: ex, y2: ey, t: 0.12, police: isOfficer(shooter) });
+  g.sfx?.('shot', shooter.x, shooter.y);
+  g.stats.shotsFired++;
+  if (isOfficer(shooter)) (shooter as Officer).shotsFired++;
+  if (wd.noise > 100) {
+    panicNear(g, shooter.x, shooter.y, wd.noise, isOfficer(shooter));
+    reportShots(g, shooter.x, shooter.y);
+  }
+  if (victim) {
+    if (wd.id === 'taser') subdue(g, victim, shooter);
+    else applyDamage(g, victim, wd.dmg * (0.7 + rng() * 0.6), shooter, wd.lethal);
+    // shooting at someone makes an armed suspect of them fight back sometimes
+    if (victim.kind === 'civ') {
+      const c = victim as Civilian;
+      if (c.weapon && c.state !== 'down' && c.injury !== 'dead' && c.injury !== 'incap' && rng() < c.aggression) {
+        c.state = 'hostile'; c.drawn = true;
+      }
     }
   }
 }

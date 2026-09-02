@@ -83,9 +83,14 @@ function suspectNear(g: Game, x: number, y: number, forceArm: string | null): Ci
 
 // ---------- ambient crime generation ----------
 export function crimeTick(g: Game, dts: number) {
-  // expected: roughly one minor event every ~3 game-minutes, scaled by neighborhood crime pressure
+  // pacing: leave breathing room — min gap between calls, cap on simultaneous ones
+  const active = g.incidents.filter(i => i.state !== 'resolved').length;
+  if (active >= 4) return;
+  const lastAt = (g as any).lastCrimeAt ?? -999;
+  if (g.time - lastAt < 8) return;
   const pressure = g.world.hoods.reduce((s, h) => s + h.crime, 0) / 100;
-  if (rng() > dts * 0.04 * (1 + pressure)) return;
+  if (rng() > dts * 0.03 * (1 + pressure)) return;
+  (g as any).lastCrimeAt = g.time;
   const roll = rng();
   const hood = weightedHood(g);
   const p = randomSidewalkPoint(g.world, hood);
@@ -113,7 +118,7 @@ export function crimeTick(g: Game, dts: number) {
     a.state = 'fight'; b2.state = 'fight';
     const inc = createIncident(g, 'fight', p.x, p.y, { suspects: [a.id, b2.id], armed: false });
     a.incident = inc.id; b2.incident = inc.id;
-    inc.escalateAt = g.time + ri(4, 9);
+    inc.escalateAt = g.time + ri(9, 18);
   } else if (roll < 0.9) {
     const homes = g.world.buildings.filter(b => b.kind === 'house' || b.kind === 'store');
     if (!homes.length) return;
@@ -132,7 +137,7 @@ export function crimeTick(g: Game, dts: number) {
     const s = suspectNear(g, (b.x + 2) * TILE, (b.y + b.h - 2) * TILE, armed ? pick(CRIMINAL_GUNS) : null);
     s.x = (b.x + 2) * TILE + 8; s.y = (b.y + b.h - 2) * TILE + 8;
     const inc = createIncident(g, armed ? 'armed_robbery' : 'robbery', s.x, s.y, { suspects: [s.id], armed, building: b.id });
-    inc.escalateAt = g.time + ri(3, 6);
+    inc.escalateAt = g.time + ri(10, 18);
   }
 }
 
@@ -178,14 +183,14 @@ function updatePursuit(g: Game, inc: Incident, dts: number) {
   inc.chaseHeat = (inc.chaseHeat ?? 0) + (close ? dts : -dts * 0.5);
   if (inc.chaseHeat < 0) inc.chaseHeat = 0;
   const crashed = close && rng() < dts * 0.02;
-  if ((inc.chaseHeat > 3.5) || crashed) {
+  if ((inc.chaseHeat > 5) || crashed) {
     // driver gives up or wrecks — becomes an on-foot scene
     v.stolen = false; v.driver = null; v.speed = 0; v.parked = true; v.path = null;
     s.state = 'crime'; s.x = v.x + 12; s.y = v.y + 6; s.path = null;
     inc.reported += crashed ? ' UPDATE: vehicle crashed.' : ' UPDATE: vehicle stopped.';
     g.notify(crashed ? 'PURSUIT: vehicle crashed!' : 'PURSUIT: vehicle stopped', 'warn', v.x, v.y);
     inc.log.push(crashed ? 'Vehicle crashed.' : 'Vehicle stopped.');
-  } else if (g.time - inc.created > 25) {
+  } else if (g.time - inc.created > 40) {
     v.stolen = false; v.driver = null; v.maxSpeed = 105;
     s.state = 'gone'; s.x = -999; s.y = -999; s.incident = null;
     resolveIncident(g, inc, 'suspect escaped');
@@ -264,7 +269,7 @@ export function assignOfficer(g: Game, o: Officer, inc: Incident) {
 export function onOfficerArrive(g: Game, o: Officer, inc: Incident) {
   if (inc.state === 'resolved') return;
   inc.state = 'onscene';
-  inc.resolveTimer = 3 + rng() * 4; // seconds of assessment
+  inc.resolveTimer = 6 + rng() * 5; // seconds of assessment — long enough to watch or join
   inc.log.push(`${o.name} arrived on scene.`);
 }
 
@@ -296,7 +301,7 @@ export function updateIncidents(g: Game, dts: number) {
         const sent = dispatchNearestOfficer(g, inc, g.control);
         if (sent) addLog(g, `Auto-dispatch: ${sent.name} → ${inc.title}.`, 'info');
       }
-      const limit = inc.priority === 3 ? 10 : inc.priority === 2 ? 16 : 25; // game minutes
+      const limit = inc.priority === 3 ? 25 : inc.priority === 2 ? 45 : 90; // game minutes
       if (g.time - inc.created > limit) {
         resolveIncident(g, inc, 'missed');
         continue;
@@ -381,7 +386,7 @@ function resolveScene(g: Game, inc: Incident, o: Officer) {
       const s = suspectNear(g, inc.x, inc.y, pick(CRIMINAL_GUNS));
       s.state = 'hostile'; s.drawn = true; s.incident = inc.id; inc.suspects.push(s.id);
       g.notify('Armed subject located!', 'bad', inc.x, inc.y);
-      inc.resolveTimer = 5;
+      inc.resolveTimer = 7;
       return;
     }
     resolveIncident(g, inc, rng() < 0.8 ? 'cleared' : 'unfounded');
@@ -402,7 +407,7 @@ function resolveScene(g: Game, inc: Incident, o: Officer) {
     // resolve when nothing else pending
     if (live.filter(s => s !== held && s.state !== 'arrested').length === 0) {
       resolveIncident(g, inc, 'arrest');
-    } else inc.resolveTimer = 4;
+    } else inc.resolveTimer = 6;
     return;
   }
 
@@ -430,7 +435,7 @@ function resolveScene(g: Game, inc: Incident, o: Officer) {
       anyAction = true;
     }
   }
-  inc.resolveTimer = 6;
+  inc.resolveTimer = 9;
   if (!anyAction) resolveIncident(g, inc, 'cleared');
 }
 
@@ -506,7 +511,7 @@ export function spawnIncidentType(g: Game, type: IncidentType, x: number, y: num
       s.state = 'crime';
     });
     inc.x = bank.door.x * TILE + 8; inc.y = (bank.door.y + 1) * TILE + 8;
-    inc.escalateAt = g.time + 8;
+    inc.escalateAt = g.time + 15;
   }
   return inc;
 }
