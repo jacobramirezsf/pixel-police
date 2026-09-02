@@ -1,5 +1,7 @@
 # Pixel Police Department
 
+**Play: https://jacobramirezsf.github.io/pixel-police/** (mobile + desktop)
+
 Open-world, systems-driven police department sandbox inside a living pixel city.
 You run the whole department — and can drop down into any single officer at any time.
 
