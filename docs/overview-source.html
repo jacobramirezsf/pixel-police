@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pixel Police Department — Game &amp; Build Overview</title>
+<style>
+  @page { size: letter; margin: 18mm 16mm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1c22; font-size: 10.5pt; line-height: 1.55; }
+  .mono { font-family: 'Courier New', monospace; }
+  header { border-bottom: 3px solid #2b57a8; padding-bottom: 14px; margin-bottom: 18px; }
+  h1 { font-family: 'Courier New', monospace; font-size: 22pt; letter-spacing: 2px; color: #14161c; }
+  .tag { font-size: 10pt; color: #555a66; margin-top: 4px; }
+  .linkline { font-family: 'Courier New', monospace; font-size: 9.5pt; margin-top: 8px; color: #2b57a8; }
+  h2 { font-family: 'Courier New', monospace; font-size: 12.5pt; letter-spacing: 1.5px; color: #2b57a8; margin: 20px 0 8px; border-bottom: 1px solid #d8dbe2; padding-bottom: 3px; }
+  h3 { font-size: 10.5pt; margin: 12px 0 4px; color: #14161c; }
+  p { margin: 6px 0; }
+  ul { margin: 6px 0 6px 18px; }
+  li { margin: 3px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9pt; }
+  th, td { border: 1px solid #c8ccd6; padding: 4px 7px; text-align: left; vertical-align: top; }
+  th { background: #eef1f6; font-family: 'Courier New', monospace; font-size: 8.5pt; letter-spacing: 0.5px; }
+  td.mono, .filecol { font-family: 'Courier New', monospace; font-size: 8.5pt; white-space: nowrap; }
+  .pill { display: inline-block; font-family: 'Courier New', monospace; font-size: 8pt; background: #eef1f6; border: 1px solid #c8ccd6; padding: 1px 6px; margin: 1px 2px 1px 0; border-radius: 2px; }
+  .callout { background: #f4f6fa; border-left: 3px solid #2b57a8; padding: 8px 12px; margin: 10px 0; font-size: 9.5pt; }
+  .grid2 { display: flex; gap: 18px; }
+  .grid2 > div { flex: 1; }
+  .pagebreak { page-break-before: always; }
+  .quote { font-style: italic; color: #3a3e4a; }
+  footer { margin-top: 24px; padding-top: 8px; border-top: 1px solid #d8dbe2; font-size: 8.5pt; color: #778; font-family: 'Courier New', monospace; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PIXEL POLICE DEPARTMENT</h1>
+  <div class="tag">Open-world, systems-driven police department sandbox inside a living pixel city &nbsp;·&nbsp; working title &nbsp;·&nbsp; playable prototype, September 2026</div>
+  <div class="linkline">PLAY (mobile + desktop): https://jacobramirezsf.github.io/pixel-police/<br>
+  SOURCE: github.com/jacobramirezsf/pixel-police &nbsp;·&nbsp; local: ~/Documents/Makery/projects/PixelPolice</div>
+</header>
+
+<h2>/ 01 / WHAT IT IS</h2>
+<p>You run a small police department inside a pixel city that does not revolve around you. Roughly 190 simulated residents commute, shop, walk dogs, drink at bars, argue, and occasionally commit crimes — whether or not you're watching. Calls come into dispatch with <b>incomplete, sometimes wrong information</b>. You can run everything from above — assigning units, setting policy, managing budget — or drop into any single officer and walk, drive, question, arrest, and shoot in direct control. Every decision feeds a persistent consequence system: neighborhoods remember how they're treated, city hall adjusts your funding, and gangs remember who you arrested.</p>
+<p class="quote">"There is a little city living its life. I have a police department inside it. Calls are coming in. I can personally respond to something or manage it from above, and over time my decisions determine what kind of department and what kind of city this becomes."</p>
+<p><b>Design principles:</b> emergent stories over scripted missions · dispatch information is imperfect · civilians carry no CRIMINAL/INNOCENT labels · most calls are mundane so violence stays memorable · the player may make bad, reckless, or corrupt decisions — the game answers with consequences, never invisible walls · <b>mobile-first controls and UI</b> ("the city is the interface").</p>
+
+<h2>/ 02 / THE CITY</h2>
+<ul>
+  <li><b>One generated district</b> (seeded, deterministic): road grid with crosswalks and working traffic, ~80 buildings with enterable interiors (station, bank, stores, bars, houses, apartments), park, street furniture, day/night cycle with headlights and lamp glow.</li>
+  <li><b>Four neighborhoods</b> — wealthy Harbor Heights, commercial Midtown, high-crime Old Docks, residential Cedar Park — each tracking <b>trust, crime pressure, and tension</b> that respond to how you police them.</li>
+  <li><b>Two gang territories</b>: Dockside&nbsp;9 and the Eastside Kings each hold a stronghold building and the blocks around it. Territory <b>hostility</b> (visible on the GANG TURF map overlay) rises with every member you arrest, wound, or kill — and above ~40, officers walking their turf get jumped. Entering a stronghold uninvited wakes armed defenders.</li>
+  <li><b>Civilians persist</b>: homes, jobs, schedules, personalities, criminal records, warrants, concealed weapons, fear, and gang affiliations. They chat, panic, witness, call 911, cooperate or refuse.</li>
+</ul>
+
+<h2>/ 03 / DISPATCH &amp; INCIDENTS</h2>
+<p>Procedural calls, ~1 every 30 seconds of play: noise, traffic stops, suspicious persons, shoplifting, fights, burglaries, robberies, armed robberies, shots fired, vehicle pursuits, gang attacks, bank robberies, shootouts, stronghold raids. What the caller reports and what is actually true <b>diverge</b>: weapons go unreported, unarmed people get called in as armed, and calls escalate while units travel ("UPDATE: caller now reports gunshots"). Unanswered calls expire — and cost neighborhood trust and council goodwill. Suspects decide to comply, flee, or fight based on personality, weapon, numbers, and situation. Pursuits have chase-heat (drivers yield or crash under sustained pressure), foot chases end in tackles or turned weapons, and every scene resolution — arrest, warning, citation, gone-on-arrival — is systemic, not scripted.</p>
+
+<h2>/ 04 / COMBAT</h2>
+<p>Free fire, fully unrestricted: draw a weapon and press-and-hold anywhere. Every round is a real ray with spread that stops on walls and trees and hits <b>whoever is in its path</b> — suspects, bystanders, other officers. Data-driven weapons (pistols, carbine, shotgun, taser, beanbag; criminal handguns, shotguns, rifles, knives), line-of-sight and cover, injuries from minor to critical to dead, morale-driven surrender and flight, officers who pathfind through doors to threats, EMS and coroner cleanup after scenes quiet down. Gunfire panics crowds and generates its own shots-fired calls — including against you.</p>
+
+<h2>/ 05 / RUNNING &amp; GROWING THE DEPARTMENT</h2>
+<div class="grid2"><div>
+<h3>Consequences</h3>
+<ul>
+  <li>Wrongful arrests → complaints, trust loss</li>
+  <li>Unjustified shootings → lawsuits (−$2,000), protests at the station</li>
+  <li>Injured officers hospitalized for days; the fallen get End of Watch</li>
+  <li>Low morale → resignations; missed calls → crime growth</li>
+</ul>
+<h3>City hall relationships</h3>
+<ul>
+  <li><b>Council</b> sets daily funding (0.6× when hostile, 1.4× when supportive)</li>
+  <li><b>Mayor</b> unlocks grants and surplus offers</li>
+  <li>Both shift daily with resolved calls, arrests, missed calls, lawsuits, deaths, and citywide trust</li>
+</ul>
+</div><div>
+<h3>Earning &amp; upgrading</h3>
+<ul>
+  <li><b>City contracts</b> ($900–$3,800): patrol-hours in a district, crime-reduction pushes, response guarantees, stronghold raids</li>
+  <li><b>Government surplus</b>: federal grants, $800 cruisers, free carbines, ballistic vests for the roster</li>
+  <li><b>Hire/fire officers</b> ($500), buy cars ($3,000), buy per-officer weapons</li>
+  <li><b>SWAT team</b> ($6,000): 4 heavy officers + van — deploy to any priority call or raid strongholds. Clearing one disbands the gang and drops district crime</li>
+</ul>
+</div></div>
+<p>The whole loop lives in one thumb-friendly panel: <span class="pill">DEPT</span> → <span class="pill">OVERVIEW</span> <span class="pill">GROW</span> <span class="pill">CONTRACTS</span> <span class="pill">CITY HALL</span>.</p>
+
+<h2>/ 06 / SANDBOX</h2>
+<p>A first-class cheats menu, not a debug console: money, god mode, infinite ammo, free equipment, heal/spawn officers and cars, free SWAT, gang heat min/max, trust min/max, consequence toggle, time skip — and one-tap incident spawning up to BANK ROBBERY and LARGE SHOOTOUT. Sandbox use flags saves but never blocks them. Normal play and chaos play are both first-class.</p>
+
+<div class="pagebreak"></div>
+<h2>/ 07 / CONTROLS</h2>
+<table>
+<tr><th>ACTION</th><th>MOBILE (primary platform)</th><th>DESKTOP</th></tr>
+<tr><td>Camera</td><td>drag to pan · pinch to zoom</td><td>drag · scroll wheel</td></tr>
+<tr><td>Select / orders</td><td>tap officer → tap map to move · tap incident to send · MULTI toggle for squads</td><td>click · shift-click · same flow</td></tr>
+<tr><td>Direct control</td><td>CONTROL button → left joystick + action pad (INTERACT / DRAW / RELOAD / CAR / FIRE)</td><td>WASD · E interact · F draw · R reload · G car · L lights · Esc release</td></tr>
+<tr><td>Shooting</td><td>draw, then <b>press-and-hold anywhere</b> to autofire at that point; FIRE button = aim assist</td><td>hold mouse button; aim line shows while drawn</td></tr>
+<tr><td>Time</td><td colspan="2">pause / 1× / 2× / 4× in top HUD · Space toggles pause · 👁 = clean view (just watch the city)</td></tr>
+</table>
+
+<h2>/ 08 / THE BUILD</h2>
+<p><b>Stack:</b> Vite + TypeScript, plain Canvas 2D, DOM UI, WebAudio-synthesized SFX. <b>Zero runtime dependencies.</b> ~119&nbsp;KB of JS (~40&nbsp;KB gzipped). Deployed to GitHub Pages by CI (typecheck → build → deploy on every push to main).</p>
+<table>
+<tr><th>MODULE</th><th>OWNS</th></tr>
+<tr><td class="filecol">sim/types.ts</td><td>Every interface + the single <span class="mono">Game</span> state object all systems operate on</td></tr>
+<tr><td class="filecol">sim/data.ts</td><td>Data-driven weapon definitions, names, incident titles</td></tr>
+<tr><td class="filecol">sim/world.ts</td><td>Seeded city generation (96×72 tiles, neighborhoods, buildings, gang territories, props), A* pathfinding with walk/drive cost functions, Bresenham line-of-sight</td></tr>
+<tr><td class="filecol">sim/agents.ts</td><td>Civilian / officer / vehicle spawning + AI state machines, movement, arrests, gang member behavior, SWAT officers, traffic (yield-to-siren, anti-overlap, honking)</td></tr>
+<tr><td class="filecol">sim/incidents.ts</td><td>Ambient crime generation with pacing gates, incident lifecycle (queued→assigned→onscene→resolved), imperfect reports, escalation, pursuit chase-heat, gang pressure/ambushes, stronghold raids, EMS sweep</td></tr>
+<tr><td class="filecol">sim/combat.ts</td><td>Target-locked AI fire + free-fire point rays (spread, wall clipping, bystander hits), cover, injuries, armor, surrender morale, no-LOS approach via pathfinding</td></tr>
+<tr><td class="filecol">sim/dept.ts</td><td>Consequences (casualties→complaints/lawsuits/protests), city relations, contracts, surplus, daily economy, resignations</td></tr>
+<tr><td class="filecol">render/render.ts</td><td>Prerendered base-map canvas, dynamic roofs (interiors reveal when entered), entities, tracers, territory/heat overlays, day-night + headlights + lamp glow</td></tr>
+<tr><td class="filecol">ui/ui.ts</td><td>Toolbar, sub-tabbed panels, contextual action bar, alerts, control HUD — talks to main via a typed <span class="mono">UIApi</span></td></tr>
+<tr><td class="filecol">main.ts</td><td>Game loop, all input (touch/pinch/joystick/keys/hold-to-fire), direct control + car physics, save/load, sandbox implementations</td></tr>
+<tr><td class="filecol">sound.ts</td><td>Synthesized shot / radio blip / alarm / chime / thud / honk, distance-attenuated</td></tr>
+</table>
+<h3>Architecture invariants</h3>
+<ul>
+  <li><b>The sim never depends on the controlled officer</b> — direct control is input injection into one entity; everything else keeps simulating.</li>
+  <li>All cross-references are <b>persistent IDs</b>, never object pointers → saves are plain JSON; the city itself regenerates deterministically from a stored seed (mulberry32).</li>
+  <li>Content is data-driven: a new weapon, incident type, contract kind, or unit type is a table entry + small handlers, not a rewrite.</li>
+  <li>Dispatch UI never reads an incident's hidden <span class="mono">truth</span> — only the possibly-wrong <span class="mono">reported</span> text.</li>
+</ul>
+<h3>How it was verified</h3>
+<p>Every pass was playtested headlessly with Playwright driving the real game in Chromium (desktop + emulated iPhone): walking, driving, interacting, arrests, raids, contract payouts, save/load round-trips, long hands-off soaks — asserting on live sim state via a debug hook and screenshotting mobile/desktop/night layouts. Notable bugs this caught: a 36%-of-the-time crash from re-rolling <span class="mono">pick()</span> inside a <span class="mono">find()</span> predicate; officers combat-locking on fistfights they couldn't shoot; responders stranded by a 4-pixel vehicle-entry tolerance mismatch; and an "impossible" miss streak that turned out to be bullets legitimately stopping on a tree.</p>
+
+<h2>/ 09 / STATE &amp; ROADMAP</h2>
+<p><b>Done:</b> living city · dispatch/uncertainty · multi-scale control · driving · pursuits · free-fire combat · injuries/EMS · consequences/protests · gang territory &amp; strongholds · SWAT · contracts/relations/surplus · sandbox · save/load · sound · mobile-first UI · CI deploy.</p>
+<p><b>Next candidates:</b> detectives &amp; investigations (evidence, repeat offenders) · more department policies (pursuit rules, use-of-force) · K9/traffic units · scenario starts (failing department, corrupt department) · multiple maps (small town, county sheriff) · richer interiors · corruption path · audio pass.</p>
+<p class="callout"><b>Handing off?</b> Read <span class="mono">docs/HANDOFF.md</span> in the repo first — it carries the architecture invariants, tuning constants, testing recipe, and the known-gaps list, pass by pass.</p>
+
+<footer>PIXEL POLICE DEPARTMENT · prototype overview · September 2, 2026 · built with Claude Code · play at jacobramirezsf.github.io/pixel-police</footer>
+</body>
+</html>
