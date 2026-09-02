@@ -60,6 +60,7 @@ export function fireAt(g: Game, shooter: Fighter, tgt: Fighter) {
   if (shooter.ammo <= 0 && !inf) reload(g, shooter);
 
   g.shots.push({ x1: shooter.x, y1: shooter.y, x2: tgt.x + (rng() - 0.5) * 8, y2: tgt.y + (rng() - 0.5) * 8, t: 0.12, police: isOfficer(shooter) });
+  g.sfx?.('shot', shooter.x, shooter.y);
   g.stats.shotsFired++;
   if (isOfficer(shooter)) { shooter.shotsFired++; }
 
@@ -109,6 +110,7 @@ export function subdue(g: Game, tgt: Fighter, by: Fighter) {
 export function applyDamage(g: Game, tgt: Fighter, dmg: number, by: Fighter | null, lethal: boolean, stray = false) {
   if (isOfficer(tgt) && g.cheats.god && g.control === tgt.id) return;
   tgt.hp -= dmg;
+  g.sfx?.('thud', tgt.x, tgt.y);
   const prev = tgt.injury;
   if (tgt.hp <= 0) tgt.injury = 'dead';
   else if (tgt.hp < 20) tgt.injury = 'incap';

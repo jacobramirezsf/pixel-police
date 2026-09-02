@@ -45,10 +45,24 @@ Headless playtest scripts live in the session scratchpad pattern — recreate as
 Playwright (borrow install from `../open-collections/node_modules/playwright`),
 `window.game()` exposes state; drive DOM buttons + keyboard, screenshot, assert states.
 
+## Pass 2 additions (same day)
+
+- **Vehicle pursuits**: `spawnPursuit` (ambient ~3% of crime rolls + sandbox button). Fleeing stolen car, assigned units grab patrol cars (jogging to one first via `wantCar`), chase-heat model → driver yields or crashes → on-foot scene. Escape timer at 25 game-min.
+- **Auto-dispatch policy** (DEPT → POLICY): off / low-priority-only / all calls. Runs through `dispatchNearestOfficer`.
+- **Strategic DETAIN**: select a civilian → "DETAIN (send unit)" sends nearest officer through the pursuing→detain→auto-escort→booking chain.
+- **EMS/coroner sweep**: downed civilians are transported once the scene is quiet (state `gone`).
+- **Sound** (`src/sound.ts`): synthesized shot/blip/chime/thud/alarm, distance-attenuated via `g.sfx`, toggle in MORE, AudioContext unlocked on first pointer.
+- **Polish**: onboarding overlay (localStorage `pp.seen`), queued-call badge on DISPATCH tab, muzzle flashes, blood pools, night headlight cones, roof skylights, walk bob, incident labels at zoom ≥1.5.
+- **Bugs fixed**: officers no longer lock into `combat` against fistfights (nearestHostile is `hostile`-only); the intermittent crimeTick crash was `find(q => q.id === pick(storeIds))` re-picking per element (~36% miss) — pick hoisted; city gen now guarantees ≥2 stores; traffic got front-hemisphere braking + deadlock creep.
+
+## Deploy
+
+GitHub Pages via `.github/workflows/ci.yml` (same as PixelWar): push to main → typecheck, build, deploy.
+Live at https://jacobramirezsf.github.io/pixel-police/
+
 ## Known gaps / next steps
 
-- **Vehicle pursuit** incident type is stubbed in types but has no generator (foot pursuit works).
-- Traffic cars overlap at intersections (no real lane/queue model); peds aren't hit by cars.
+- Traffic cars still overlap sometimes (no real lane/queue model); peds aren't hit by cars.
 - Interiors: suspects use them (bank/store/burglary) but civilians teleport-ish inside buildings rather than pathing room to room.
 - Officer AI won't self-dispatch — player is the dispatcher (by design; a policy toggle "auto-dispatch low priority" would be a good DEPT policy first step).
 - Department policies, corruption, investigations/detectives, K9/SWAT units: data structures ready (squad field, incident log), not implemented.

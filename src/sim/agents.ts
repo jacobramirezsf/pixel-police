@@ -132,7 +132,9 @@ export function updateCivilian(g: Game, c: Civilian, dts: number) {
       return;
     case 'surrender':
     case 'detained':
-      return; // held in place
+    case 'driving':
+    case 'gone':
+      return; // held in place / carried by vehicle / off-map
     case 'down': return;
     case 'flee': {
       if (moveAlong(c, dts, c.speed * 2.1)) { c.state = 'idle'; c.waitUntil = g.time + ri(2, 8); }
@@ -286,7 +288,24 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
     }
     case 'responding': {
       const inc = g.incidents.find(i => i.id === o.incident);
-      if (!inc || inc.state === 'resolved') { o.state = 'idle'; o.incident = null; break; }
+      if (!inc || inc.state === 'resolved') { o.state = 'idle'; o.incident = null; (o as any).wantCar = null; break; }
+      const wantCar = (o as any).wantCar as number | null | undefined;
+      if (wantCar != null) {
+        const car = vehById(g, wantCar);
+        if (!car || car.driver !== null) { (o as any).wantCar = null; o.path = null; }
+        else if (dist(o, car) < 34) {
+          (o as any).wantCar = null;
+          enterVehicle(g, o, car);
+          car.lights = inc.priority >= 2;
+          setPath(g, car, { x: inc.x, y: inc.y }, true);
+          o.state = 'driving';
+          break;
+        } else {
+          if (!o.path || o.path.length === 0) setPath(g, o, { x: car.x, y: car.y });
+          moveAlong(o, dts, o.speed * 1.5);
+          break;
+        }
+      }
       if (!o.path) setPath(g, o, { x: inc.x, y: inc.y });
       if (moveAlong(o, dts, o.speed * 1.5) || dist(o, inc) < 26) {
         o.state = 'onscene'; o.path = null;
@@ -311,27 +330,32 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
         const chance = 0.5 + o.talk * 0.2 + (s.fear * 0.3) - s.aggression * 0.25;
         if (rng() < chance) {
           s.state = 'detained'; s.detainedBy = o.id; s.path = null;
-          o.pursuit = null; o.state = o.incident !== null ? 'onscene' : 'idle';
+          o.pursuit = null;
           addLog(g, `${o.name} caught ${s.name}.`, 'good');
+          if (o.incident !== null) o.state = 'onscene';
+          else { o.escorting = s.id; o.state = 'escorting'; o.path = null; } // standalone detain order → bring them in
         } else if (s.weapon && rng() < s.aggression * 0.5) {
           s.state = 'hostile'; s.drawn = true;
           g.notify('Suspect turned on officer!', 'bad', s.x, s.y);
         } else {
-          // wriggled free, keep running
+          // wriggled free — now they're running for real
           s.fear = Math.min(1, s.fear + 0.2);
+          if (s.state !== 'flee') { s.state = 'flee'; s.path = null; }
         }
       } else {
         if (!o.path || o.path.length === 0 || rng() < 0.1) setPath(g, o, { x: s.x, y: s.y });
         moveAlong(o, dts, o.speed * 1.6);
-        // suspect keeps fleeing
-        if ((!s.path || s.path.length === 0)) {
-          const ang = Math.atan2(s.y - o.y, s.x - o.x) + (rng() - 0.5) * 0.8;
-          const to = { x: s.x + Math.cos(ang) * 120, y: s.y + Math.sin(ang) * 120 };
-          to.x = Math.max(TILE, Math.min(g.world.w * TILE - TILE, to.x));
-          to.y = Math.max(TILE, Math.min(g.world.h * TILE - TILE, to.y));
-          setPath(g, s, to);
+        // only actual fleers keep sprinting away; a person walking normally just gets approached
+        if (s.state === 'flee') {
+          if ((!s.path || s.path.length === 0)) {
+            const ang = Math.atan2(s.y - o.y, s.x - o.x) + (rng() - 0.5) * 0.8;
+            const to = { x: s.x + Math.cos(ang) * 120, y: s.y + Math.sin(ang) * 120 };
+            to.x = Math.max(TILE, Math.min(g.world.w * TILE - TILE, to.x));
+            to.y = Math.max(TILE, Math.min(g.world.h * TILE - TILE, to.y));
+            setPath(g, s, to);
+          }
+          moveAlong(s, dts, s.speed * 1.9);
         }
-        moveAlong(s, dts, s.speed * 1.9);
       }
       break;
     }
@@ -353,6 +377,8 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
       // vehicle sim handles motion; check arrival
       if (o.incident !== null) {
         const inc = g.incidents.find(i => i.id === o.incident);
+        const chasing = inc && inc.type === 'pursuit' && vehById(g, inc.vehicle ?? null)?.stolen;
+        if (chasing) break; // incidents.ts steers the chase; stay in the car
         if (inc && inc.state !== 'resolved' && dist(v, inc) < 60) {
           exitVehicle(g, o);
           o.state = 'responding';
@@ -390,14 +416,16 @@ export function finishArrest(g: Game, o: Officer, s: Civilian) {
     g.notify('Complaint filed: wrongful arrest', 'bad');
   } else {
     s.record.push('arrested');
+    o.morale = Math.min(100, o.morale + 3);
     addLog(g, `${o.name} booked ${s.name}.`, 'good');
+    g.sfx?.('chime');
   }
 }
 
 export function nearestHostile(g: Game, from: { x: number; y: number }, range: number): Civilian | null {
   let best: Civilian | null = null, bd = range;
   for (const c of g.civs) {
-    if (c.state !== 'hostile' && c.state !== 'fight') continue;
+    if (c.state !== 'hostile') continue; // brawlers are a scene to break up, not a firefight
     if (c.injury === 'incap' || c.injury === 'dead') continue;
     const d = dist(from, c);
     if (d < bd) { bd = d; best = c; }
@@ -450,19 +478,33 @@ export function updateVehicle(g: Game, v: Vehicle, dts: number) {
     return;
   }
   if (v.stolen) {
-    // fleeing car handled like ai drive at max speed
-    if (!v.path || v.path.length === 0) setPath(g, v, randomRoadPoint(g.world), true);
-    aiDrive(g, v, dts, v.maxSpeed);
+    // fleeing car: fresh escape routes, never yields
+    if (!v.path || v.path.length < 3) setPath(g, v, randomRoadPoint(g.world), true);
+    aiDrive(g, v, dts, v.maxSpeed, true);
   }
 }
 
-function aiDrive(g: Game, v: Vehicle, dts: number, targetSpeed: number) {
+function aiDrive(g: Game, v: Vehicle, dts: number, targetSpeed: number, reckless = false) {
   if (!v.path || v.path.length === 0) { v.speed = Math.max(0, v.speed - 200 * dts); return; }
-  // brake if a vehicle directly ahead
-  const aheadX = v.x + Math.cos(v.angle) * 26, aheadY = v.y + Math.sin(v.angle) * 26;
-  for (const q of g.vehicles) {
-    if (q === v) continue;
-    if (Math.hypot(q.x - aheadX, q.y - aheadY) < 20) { targetSpeed = Math.min(targetSpeed, Math.max(0, q.speed - 10)); break; }
+  // brake for vehicles in the front hemisphere; hard stop when nearly touching
+  if (!reckless) {
+    for (const q of g.vehicles) {
+      if (q === v) continue;
+      const dq = Math.hypot(q.x - v.x, q.y - v.y);
+      if (dq > 40) continue;
+      let rel = Math.atan2(q.y - v.y, q.x - v.x) - v.angle;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      if (Math.abs(rel) < 1.1) {
+        targetSpeed = Math.min(targetSpeed, dq < 22 ? 0 : Math.max(0, q.speed - 8));
+      }
+    }
+    // deadlock breaker: if stuck behind someone too long, creep through
+    const anyV = v as any;
+    if (v.speed < 3 && targetSpeed === 0) {
+      anyV.stuckFor = (anyV.stuckFor ?? 0) + dts;
+      if (anyV.stuckFor > 4) targetSpeed = 18;
+    } else anyV.stuckFor = 0;
   }
   v.speed += Math.sign(targetSpeed - v.speed) * Math.min(Math.abs(targetSpeed - v.speed), 160 * dts);
   const wp = v.path[0];

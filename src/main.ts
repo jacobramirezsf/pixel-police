@@ -8,13 +8,14 @@ import {
   civById, offById, vehById, dist, setPath, orderMove, orderPatrol, clearAssignment,
   enterVehicle, exitVehicle, finishArrest, nearestHostile,
 } from './sim/agents';
-import { crimeTick, updateIncidents, assignOfficer, spawnIncidentType, resolveIncident } from './sim/incidents';
+import { crimeTick, updateIncidents, assignOfficer, spawnIncidentType, resolveIncident, dispatchNearestOfficer, spawnPursuit } from './sim/incidents';
 import { updateDept, addLog, HIRE_COST, CAR_COST } from './sim/dept';
 import { fireAt, reload as reloadWeaponFn, applyDamage } from './sim/combat';
 import { buildBase, draw } from './render/render';
 import type { RenderOpts } from './render/render';
 import { initUI, addAlert, refreshPanel, refreshHUD, refreshCtxBar, refreshControlHud, setTab, getTab } from './ui/ui';
 import type { UIApi } from './ui/ui';
+import { initAudio, sfx } from './sound';
 
 // ================= game construction =================
 function newGameState(seed: number): Game {
@@ -36,6 +37,7 @@ function newGameState(seed: number): Game {
     nextId: 1,
     cam: { x: 0, y: 0, zoom: 2 },
     dayPaid: -1, protestUntil: 0, protestHood: 0,
+    policy: { autoDispatch: 'off' },
     notify: (t, c, x, y) => addAlert(t, c, x, y),
   };
   spawnPopulation(g, 140, 14);
@@ -129,13 +131,21 @@ const api: UIApi = {
   dispatchNearest(incId) {
     const inc = g.incidents.find(i => i.id === incId);
     if (!inc) return;
-    const free = g.officers.filter(o =>
-      o.injury !== 'dead' && o.state !== 'hospital' && o.state !== 'down' && o.id !== g.control &&
-      (o.incident === null || o.incident === incId));
-    if (!free.length) { addAlert('No available units', 'warn'); return; }
-    free.sort((a, b) => dist(a, inc) - dist(b, inc));
-    assignOfficer(g, free[0], inc);
-    addAlert(`${free[0].name} responding to ${inc.title}`, 'info');
+    const sent = dispatchNearestOfficer(g, inc, g.control);
+    if (sent) addAlert(`${sent.name} responding to ${inc.title}`, 'info');
+    else addAlert('No available units', 'warn');
+  },
+  orderDetain(civId) {
+    const c = civById(g, civId);
+    if (!c) return;
+    let pool = g.sel.officers.map(id => offById(g, id)).filter(o => o && o.injury !== 'dead' && o.state !== 'hospital' && o.id !== g.control) as Officer[];
+    if (!pool.length) pool = g.officers.filter(o => o.injury !== 'dead' && o.state !== 'hospital' && o.state !== 'down' && o.id !== g.control && (o.state === 'idle' || o.state === 'patrol' || o.state === 'moving'));
+    if (!pool.length) { addAlert('No available officer to send', 'warn'); return; }
+    pool.sort((a, b) => dist(a, c) - dist(b, c));
+    const o = pool[0];
+    clearAssignment(g, o);
+    o.pursuit = c.id; o.state = 'pursuing'; o.path = null;
+    addAlert(`${o.name} moving to detain ${c.name}`, 'info');
   },
   patrolSelected() {
     for (const id of g.sel.officers) {
@@ -236,6 +246,7 @@ const api: UIApi = {
   setSpeed(n) { g.speed = n; refreshHUD(); },
   sandboxSpawn(type) {
     g.cheats.usedEver = true;
+    if (type === 'pursuit') { const inc = spawnPursuit(g); api.centerOn(inc.x, inc.y); setTab(null); return; }
     const p = findSpawnPoint();
     spawnIncidentType(g, type, p.x, p.y);
     setTab(null);
@@ -292,7 +303,23 @@ function findSpawnPoint(): Pt {
   return { x: g.cam.x, y: g.cam.y };
 }
 
-function rebindNotify() { g.notify = (t, c, x, y) => addAlert(t, c, x, y); }
+function rebindNotify() {
+  g.notify = (t, c, x, y) => {
+    addAlert(t, c, x, y);
+    if (c === 'bad') g.sfx?.('alarm');
+    else if (c === 'warn' || c === 'info') g.sfx?.('blip');
+  };
+  g.sfx = (type, x, y) => {
+    let vol = 1;
+    if (x !== undefined && y !== undefined) {
+      const d = Math.hypot(x - g.cam.x, y - g.cam.y);
+      vol = Math.max(0, 1 - d / 700);
+    }
+    sfx(type, vol);
+  };
+}
+rebindNotify();
+window.addEventListener('pointerdown', () => initAudio(), { once: false });
 
 initUI(g, api);
 
@@ -592,6 +619,7 @@ function updatePlayerControl(dts: number) {
 
   const m = Math.hypot(mx, my);
   if (m > 0.05) {
+    (o as any).lastMove = performance.now();
     const spd = o.speed * 1.7 * Math.min(1, m);
     const vx = (mx / m) * spd * dts, vy = (my / m) * spd * dts;
     // per-axis collision
@@ -620,8 +648,8 @@ function updatePlayerControl(dts: number) {
 const SAVE_KEY = 'pixelpolice.save.v1';
 function saveGame() {
   const data = {
-    v: 1, seed: g.world.seed, time: g.time, budget: g.budget, dayPaid: g.dayPaid,
-    stats: g.stats, cheats: g.cheats, nextId: g.nextId,
+    v: 2, seed: g.world.seed, time: g.time, budget: g.budget, dayPaid: g.dayPaid,
+    stats: g.stats, cheats: g.cheats, nextId: g.nextId, policy: g.policy,
     hoods: g.world.hoods.map(h => ({ trust: h.trust, crime: h.crime, tension: h.tension })),
     officers: g.officers, vehicles: g.vehicles,
     civs: g.civs, log: g.log.slice(-100),
@@ -645,6 +673,7 @@ function loadGame(): boolean {
       incidents: d.incidents || [], shots: [], log: d.log || [],
       sel: { officers: [], vehicle: null, civilian: null, incident: null },
       control: null, speed: 1, protestUntil: 0, protestHood: 0,
+      policy: d.policy || { autoDispatch: 'off' },
     };
     d.hoods?.forEach((h: any, i: number) => {
       if (g.world.hoods[i]) { g.world.hoods[i].trust = h.trust; g.world.hoods[i].crime = h.crime; g.world.hoods[i].tension = h.tension; }
@@ -709,6 +738,28 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// ================= first-run onboarding =================
+try {
+  if (!localStorage.getItem('pp.seen')) {
+    const ob = document.createElement('div');
+    ob.id = 'onboard';
+    ob.innerHTML = `
+      <div class="ob-box">
+        <h2>PIXEL POLICE DEPARTMENT</h2>
+        <p>A little city is living its life. You run its police department — 4 officers, 2 cars, one budget.</p>
+        <p><b>Dispatch:</b> calls come in with incomplete information. Tap an alert to jump there, tap an incident and SEND a unit.</p>
+        <p><b>Get personal:</b> select an officer and hit CONTROL to walk, drive, question, and arrest — or fight, if it comes to that.</p>
+        <p><b>It all counts:</b> missed calls, wrongful arrests, and stray bullets follow you. SANDBOX has cheats when you just want chaos.</p>
+        <button id="ob-go">START SHIFT</button>
+      </div>`;
+    document.getElementById('app')!.appendChild(ob);
+    document.getElementById('ob-go')!.addEventListener('click', () => {
+      ob.remove();
+      try { localStorage.setItem('pp.seen', '1'); } catch { /* ignore */ }
+    });
+  }
+} catch { /* storage unavailable */ }
 
 // expose for debugging in devtools
 (window as any).game = () => g;

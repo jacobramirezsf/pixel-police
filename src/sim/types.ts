@@ -69,7 +69,7 @@ export interface Armed {
 export type CivState =
   | 'idle' | 'walk' | 'wander' | 'flee' | 'watch'
   | 'crime' | 'fight' | 'hostile' | 'surrender' | 'detained' | 'arrested'
-  | 'down' | 'protest';
+  | 'down' | 'protest' | 'driving' | 'gone';
 
 export interface Civilian extends Armed {
   id: number;
@@ -180,6 +180,12 @@ export interface Incident {
   resolveTimer: number;
   outcome: string;
   log: string[];
+  vehicle?: number | null; // fleeing vehicle (pursuits)
+  chaseHeat?: number;      // seconds a lit police unit has been on the fleeing car
+}
+
+export interface Policy {
+  autoDispatch: 'off' | 'low' | 'all';
 }
 
 export interface Shot {
@@ -244,5 +250,7 @@ export interface Game {
   dayPaid: number;
   protestUntil: number;
   protestHood: number;
+  policy: Policy;
   notify: (text: string, cls: string, x?: number, y?: number) => void;
+  sfx?: (type: string, x?: number, y?: number) => void;
 }

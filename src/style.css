@@ -94,6 +94,14 @@ button:disabled { opacity: 0.4; }
 #toolbar button span { font-size: 8px; letter-spacing: 0.5px; color: #8a8d98; }
 #toolbar button.on { background: #232a3a; }
 #toolbar button.on span { color: #9fc6ff; }
+#toolbar button { position: relative; }
+#toolbar .badge {
+  position: absolute; top: 2px; right: 8px;
+  background: #d03030; color: #fff;
+  font-size: 8px; font-style: normal;
+  min-width: 12px; height: 12px; line-height: 12px;
+  text-align: center; border-radius: 6px; padding: 0 2px;
+}
 
 #secondary {
   display: none;
@@ -207,6 +215,24 @@ button:disabled { opacity: 0.4; }
   z-index: 50; cursor: pointer;
 }
 .hidden { display: none !important; }
+
+#onboard {
+  position: absolute; inset: 0; z-index: 100;
+  background: rgba(10, 11, 14, 0.82);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+#onboard .ob-box {
+  max-width: 420px;
+  background: #16171c;
+  border: 1px solid #3a3d46;
+  border-top: 3px solid #2b57a8;
+  padding: 18px 20px;
+}
+#onboard h2 { font-size: 15px; letter-spacing: 2px; color: #9fc6ff; margin-bottom: 10px; }
+#onboard p { font-size: 11px; line-height: 1.5; margin: 8px 0; color: #b8b8c0; }
+#onboard p b { color: #ffd94a; }
+#onboard button { margin-top: 10px; width: 100%; padding: 10px; font-size: 12px; background: #2b3f66; color: #cfe3ff; border-color: #4a6da8; }
 
 @media (min-width: 700px) {
   #toolbar button { flex: none; padding: 6px 18px 7px; flex-direction: row; gap: 6px; }

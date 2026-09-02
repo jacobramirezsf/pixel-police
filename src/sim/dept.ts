@@ -1,6 +1,6 @@
 import type { Game, Civilian, Officer } from './types';
-import { rng, ri, stationDoor, randomSidewalkPoint } from './world';
-import { TILE } from './types';
+import { rng, ri, stationDoor } from './world';
+import { setPath } from './agents';
 
 export function addLog(g: Game, text: string, cls = 'info') {
   g.log.push({ t: g.time, text, cls });
@@ -87,12 +87,8 @@ export function maybeProtest(g: Game, hood: number) {
     c.state = 'protest';
     c.path = null;
     const to = { x: sd.x + ri(-40, 40), y: sd.y + ri(10, 50) };
-    const ok = c.path === null;
-    if (ok) {
-      // simple straight-ish march; setPath imported would cause cycle, walk via path assignment
-      c.path = [to];
-      c.waitUntil = g.protestUntil;
-    }
+    if (!setPath(g, c, to)) c.path = [to];
+    c.waitUntil = g.protestUntil;
     n++;
   }
   addLog(g, `Residents of ${h.name} are protesting outside the station.`, 'warn');

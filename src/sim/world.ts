@@ -326,6 +326,18 @@ export function generateCity(seed: number): World {
     }
   });
 
+  // guarantee the city has at least a couple of stores (crime + errands need them)
+  if (w.storeIds.length < 2) {
+    for (const b of w.buildings) {
+      if (w.storeIds.length >= 2) break;
+      if (b.kind === 'shop' || b.kind === 'office' || b.kind === 'bar') {
+        b.kind = 'store';
+        b.name = STORE_NAMES[w.storeIds.length % STORE_NAMES.length];
+        w.storeIds.push(b.id);
+      }
+    }
+  }
+
   return w;
 }
 

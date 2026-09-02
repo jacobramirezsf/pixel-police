@@ -152,6 +152,22 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
     ctx.fillRect(b.x * TILE + 1, b.y * TILE + 1, b.w * TILE - 2, b.h * TILE - 2);
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
     ctx.fillRect(b.x * TILE + 1, b.y * TILE + b.h * TILE - 5, b.w * TILE - 2, 4);
+    // roof texture: AC units / skylights on bigger buildings, ridge line on houses
+    if (b.kind === 'apartment' || b.kind === 'office' || b.kind === 'bank') {
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      for (let wy = b.y + 2; wy < b.y + b.h - 1; wy += 2) {
+        for (let wx = b.x + 1; wx < b.x + b.w - 1; wx += 2) {
+          ctx.fillRect(wx * TILE + 5, wy * TILE + 5, 6, 6);
+        }
+      }
+    } else if (b.kind === 'house') {
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(b.x * TILE + 2, b.y * TILE + Math.floor(b.h * TILE / 2), b.w * TILE - 4, 2);
+    }
+    if (b.kind === 'station') {
+      ctx.strokeStyle = '#7fb0ff'; ctx.lineWidth = 2;
+      ctx.strokeRect(b.x * TILE + 3, b.y * TILE + 3, b.w * TILE - 6, b.h * TILE - 6);
+    }
     // door marker
     ctx.fillStyle = '#c9a86b';
     ctx.fillRect(b.door.x * TILE + 4, b.door.y * TILE + 4, 8, 8);
@@ -163,11 +179,15 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
     }
   }
 
-  // shots (tracers) — above roofs so battles read
+  // shots (tracers + muzzle flash) — above roofs so battles read
   for (const s of g.shots) {
     ctx.strokeStyle = s.police ? 'rgba(255,240,150,0.9)' : 'rgba(255,150,90,0.9)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); ctx.stroke();
+    if (s.t > 0.07) {
+      ctx.fillStyle = 'rgba(255,220,120,0.9)';
+      ctx.beginPath(); ctx.arc(s.x1, s.y1, 3.5, 0, 7); ctx.fill();
+    }
   }
 
   // incident markers
@@ -182,6 +202,14 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
       ctx.fillStyle = `rgba(${col},1)`;
       ctx.font = 'bold 9px monospace';
       ctx.fillText('!', inc.x - 2, inc.y - 16);
+      if (cam.zoom >= 1.5) {
+        ctx.font = '7px monospace';
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        const tw = inc.title.length * 4.5 + 6;
+        ctx.fillRect(inc.x - tw / 2, inc.y - 32, tw, 10);
+        ctx.fillStyle = `rgba(${col},1)`;
+        ctx.fillText(inc.title, inc.x - tw / 2 + 3, inc.y - 24);
+      }
       if (g.sel.incident === inc.id) {
         ctx.strokeStyle = '#fff';
         ctx.beginPath(); ctx.arc(inc.x, inc.y, 22, 0, 7); ctx.stroke();
@@ -204,8 +232,27 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
 }
 
 function drawEntities(g: Game, ctx: CanvasRenderingContext2D, revealed: Set<number>, opts: RenderOpts) {
+  const h24 = hourOf(g.time);
+  const night = h24 < 6 || h24 > 20;
+  // blood pools under the downed (before bodies so they layer under)
+  for (const c of g.civs) {
+    if (c.x < 0 || (c.state !== 'down' && c.injury !== 'dead')) continue;
+    if (c.injury === 'serious' || c.injury === 'incap' || c.injury === 'dead') {
+      ctx.fillStyle = 'rgba(110,20,20,0.55)';
+      ctx.beginPath(); ctx.ellipse(c.x, c.y + 2, 7, 4, 0, 0, 7); ctx.fill();
+    }
+  }
   // vehicles
   for (const v of g.vehicles) {
+    // headlights at night for moving cars
+    if (night && Math.abs(v.speed) > 8) {
+      ctx.fillStyle = 'rgba(255,240,180,0.14)';
+      ctx.beginPath();
+      const hx = v.x + Math.cos(v.angle) * 12, hy = v.y + Math.sin(v.angle) * 12;
+      ctx.moveTo(hx, hy);
+      ctx.arc(hx, hy, 34, v.angle - 0.45, v.angle + 0.45);
+      ctx.closePath(); ctx.fill();
+    }
     ctx.save();
     ctx.translate(v.x, v.y);
     ctx.rotate(v.angle);
@@ -242,7 +289,7 @@ function drawEntities(g: Game, ctx: CanvasRenderingContext2D, revealed: Set<numb
       ctx.fillRect(c.x + 3, c.y - 2, 3, 3);
       continue;
     }
-    drawPerson(ctx, c.x, c.y, c.color, c.skin, false);
+    drawPerson(ctx, c.x, c.y - personBob(c), c.color, c.skin, false);
     if (c.drawn) {
       ctx.fillStyle = '#111';
       ctx.fillRect(c.x + 2, c.y - 2, 4, 2);
@@ -275,7 +322,7 @@ function drawEntities(g: Game, ctx: CanvasRenderingContext2D, revealed: Set<numb
       ctx.fillRect(o.x + 3, o.y - 2, 3, 3);
       continue;
     }
-    drawPerson(ctx, o.x, o.y, '#2b57a8', '#d8b28c', true);
+    drawPerson(ctx, o.x, o.y - personBob(o), '#2b57a8', '#d8b28c', true);
     if (o.drawn) { ctx.fillStyle = '#111'; ctx.fillRect(o.x + 2, o.y - 2, 5, 2); }
     if (!opts.cleanView) {
       const selected = g.sel.officers.includes(o.id);
@@ -311,6 +358,11 @@ function drawEntities(g: Game, ctx: CanvasRenderingContext2D, revealed: Set<numb
       }
     }
   }
+}
+
+function personBob(e: { id: number; path: any[] | null }): number {
+  const moving = (e.path && e.path.length) || (performance.now() - ((e as any).lastMove || 0) < 150);
+  return moving ? Math.floor(performance.now() / 130 + e.id) % 2 : 0;
 }
 
 function drawPerson(ctx: CanvasRenderingContext2D, x: number, y: number, body: string, skin: string, cop: boolean) {

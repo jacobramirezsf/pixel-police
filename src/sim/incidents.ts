@@ -1,8 +1,8 @@
 import { TILE } from './types';
 import type { Game, Incident, IncidentType, Civilian, Officer, Pt } from './types';
 import { INCIDENT_TITLES, CRIMINAL_GUNS, WEAPONS } from './data';
-import { rng, ri, pick, hoodAt, randomSidewalkPoint } from './world';
-import { makeCivilian, civById, dist, setPath, panicNear, enterVehicle, vehById } from './agents';
+import { rng, ri, pick, hoodAt, randomSidewalkPoint, randomRoadPoint } from './world';
+import { makeCivilian, civById, dist, setPath, panicNear, enterVehicle, vehById, makeVehicle, offById } from './agents';
 import { addLog } from './dept';
 
 let streetNo = 100;
@@ -89,7 +89,9 @@ export function crimeTick(g: Game, dts: number) {
   const roll = rng();
   const hood = weightedHood(g);
   const p = randomSidewalkPoint(g.world, hood);
-  if (roll < 0.2) {
+  if (roll < 0.03 && !g.incidents.some(i => i.type === 'pursuit' && i.state !== 'resolved')) {
+    spawnPursuit(g);
+  } else if (roll < 0.2) {
     createIncident(g, 'noise', p.x, p.y, {});
   } else if (roll < 0.32) {
     // traffic violation: reported near a moving civilian car
@@ -100,7 +102,9 @@ export function crimeTick(g: Game, dts: number) {
     s.state = 'wander';
     createIncident(g, 'suspicious', p.x, p.y, { suspects: [s.id], armed: !!s.weapon });
   } else if (roll < 0.62 && g.world.storeIds.length) {
-    const b = g.world.buildings.find(q => q.id === pick(g.world.storeIds))!;
+    const sid = pick(g.world.storeIds);
+    const b = g.world.buildings.find(q => q.id === sid);
+    if (!b) return;
     const s = suspectNear(g, b.door.x * TILE + 8, (b.door.y + 1) * TILE + 8, null);
     createIncident(g, 'shoplift', s.x, s.y, { suspects: [s.id], building: b.id });
   } else if (roll < 0.78) {
@@ -112,6 +116,7 @@ export function crimeTick(g: Game, dts: number) {
     inc.escalateAt = g.time + ri(4, 9);
   } else if (roll < 0.9) {
     const homes = g.world.buildings.filter(b => b.kind === 'house' || b.kind === 'store');
+    if (!homes.length) return;
     const b = pick(homes);
     const s = suspectNear(g, b.door.x * TILE + 8, b.door.y * TILE + 8, rng() < 0.25 ? pick(CRIMINAL_GUNS) : null);
     // suspect goes inside
@@ -119,12 +124,72 @@ export function crimeTick(g: Game, dts: number) {
     createIncident(g, 'burglary', s.x, s.y, { suspects: [s.id], armed: !!s.weapon, building: b.id });
   } else {
     // robbery, sometimes armed
-    const b = g.world.buildings.find(q => q.id === pick(g.world.storeIds))!;
+    if (!g.world.storeIds.length) return;
+    const sid = pick(g.world.storeIds);
+    const b = g.world.buildings.find(q => q.id === sid);
+    if (!b) return;
     const armed = rng() < 0.55;
     const s = suspectNear(g, (b.x + 2) * TILE, (b.y + b.h - 2) * TILE, armed ? pick(CRIMINAL_GUNS) : null);
     s.x = (b.x + 2) * TILE + 8; s.y = (b.y + b.h - 2) * TILE + 8;
     const inc = createIncident(g, armed ? 'armed_robbery' : 'robbery', s.x, s.y, { suspects: [s.id], armed, building: b.id });
     inc.escalateAt = g.time + ri(3, 6);
+  }
+}
+
+// ---------- vehicle pursuit ----------
+export function spawnPursuit(g: Game): Incident {
+  const p = randomRoadPoint(g.world);
+  const v = makeVehicle(g, false, p.x, p.y);
+  v.parked = false; v.stolen = true; v.maxSpeed = 132;
+  const armed = rng() < 0.35;
+  const s = makeCivilian(g, p.x, p.y, 2);
+  s.lawful = rng() * 0.3; s.state = 'driving'; s.role = 'suspect';
+  if (armed) { s.weapon = pick(CRIMINAL_GUNS); s.ammo = WEAPONS[s.weapon].mag; s.reserve = WEAPONS[s.weapon].mag; }
+  v.driver = s.id;
+  const inc = createIncident(g, 'pursuit', v.x, v.y, { suspects: [s.id], armed });
+  inc.vehicle = v.id; inc.chaseHeat = 0;
+  inc.reported = `Vehicle failed to stop and is fleeing at speed. ${armed && rng() < 0.5 ? 'Caller thinks the driver may be armed.' : 'Occupants unknown.'}`;
+  return inc;
+}
+
+function updatePursuit(g: Game, inc: Incident, dts: number) {
+  const v = vehById(g, inc.vehicle ?? null);
+  const s = civById(g, inc.suspects[0]);
+  if (!v || !s) { resolveIncident(g, inc, 'suspect gone'); return; }
+  if (!v.stolen) return; // already ended, normal scene resolution takes over
+  // incident marker + suspect ride along
+  inc.x = v.x; inc.y = v.y;
+  s.x = v.x; s.y = v.y;
+  // pursuing units keep their cars pointed at the fleeing vehicle
+  for (const oid of inc.assigned) {
+    const o = offById(g, oid);
+    if (!o || o.vehicle === null) continue;
+    const pv = vehById(g, o.vehicle);
+    if (!pv) continue;
+    pv.lights = true;
+    (pv as any).repathIn = ((pv as any).repathIn ?? 0) - dts;
+    if (!pv.path || pv.path.length < 2 || (pv as any).repathIn <= 0) {
+      setPath(g, pv, { x: v.x, y: v.y }, true);
+      (pv as any).repathIn = 1.2;
+    }
+  }
+  // heat: any lit police unit close to the car
+  const close = g.vehicles.some(q => q.police && q.lights && q.driver !== null && dist(q, v) < 70);
+  inc.chaseHeat = (inc.chaseHeat ?? 0) + (close ? dts : -dts * 0.5);
+  if (inc.chaseHeat < 0) inc.chaseHeat = 0;
+  const crashed = close && rng() < dts * 0.02;
+  if ((inc.chaseHeat > 3.5) || crashed) {
+    // driver gives up or wrecks — becomes an on-foot scene
+    v.stolen = false; v.driver = null; v.speed = 0; v.parked = true; v.path = null;
+    s.state = 'crime'; s.x = v.x + 12; s.y = v.y + 6; s.path = null;
+    inc.reported += crashed ? ' UPDATE: vehicle crashed.' : ' UPDATE: vehicle stopped.';
+    g.notify(crashed ? 'PURSUIT: vehicle crashed!' : 'PURSUIT: vehicle stopped', 'warn', v.x, v.y);
+    inc.log.push(crashed ? 'Vehicle crashed.' : 'Vehicle stopped.');
+  } else if (g.time - inc.created > 25) {
+    v.stolen = false; v.driver = null; v.maxSpeed = 105;
+    s.state = 'gone'; s.x = -999; s.y = -999; s.incident = null;
+    resolveIncident(g, inc, 'suspect escaped');
+    g.notify('Pursuit terminated — suspect got away', 'warn');
   }
 }
 
@@ -166,14 +231,21 @@ export function assignOfficer(g: Game, o: Officer, inc: Incident) {
   o.pursuit = null; o.escorting = null;
   if (!inc.assigned.includes(o.id)) inc.assigned.push(o.id);
   if (inc.state === 'queued') inc.state = 'assigned';
-  // take a car if it's far and one is nearby
+  // take a car if it's far and one is nearby (pursuits always want wheels)
   const d = dist(o, inc);
-  if (o.vehicle === null && d > 260) {
-    const car = g.vehicles.find(v => v.police && v.driver === null && dist(v, o) < 130);
-    if (car && enterVehicle(g, o, car)) {
-      car.lights = inc.priority >= 2;
-      setPath(g, car, { x: inc.x, y: inc.y }, true);
-      o.state = 'driving';
+  if (o.vehicle === null && (d > 260 || inc.type === 'pursuit')) {
+    const car = g.vehicles.find(v => v.police && v.driver === null && dist(v, o) < (inc.type === 'pursuit' ? 220 : 130));
+    if (car) {
+      if (enterVehicle(g, o, car)) {
+        car.lights = inc.priority >= 2;
+        setPath(g, car, { x: inc.x, y: inc.y }, true);
+        o.state = 'driving';
+        return;
+      }
+      // too far to hop in — jog to the car first, then drive
+      (o as any).wantCar = car.id;
+      o.state = 'responding';
+      setPath(g, o, { x: car.x, y: car.y });
       return;
     }
   }
@@ -196,12 +268,34 @@ export function onOfficerArrive(g: Game, o: Officer, inc: Incident) {
   inc.log.push(`${o.name} arrived on scene.`);
 }
 
+/** find the closest free officer and send them (used by UI button + auto-dispatch policy) */
+export function dispatchNearestOfficer(g: Game, inc: Incident, excludeId: number | null): Officer | null {
+  const free = g.officers.filter(o =>
+    o.injury !== 'dead' && o.state !== 'hospital' && o.state !== 'down' && o.id !== excludeId &&
+    (o.incident === null || o.incident === inc.id) &&
+    o.state !== 'combat' && o.state !== 'escorting' && o.state !== 'pursuing');
+  if (!free.length) return null;
+  free.sort((a, b) => dist(a, inc) - dist(b, inc));
+  assignOfficer(g, free[0], inc);
+  return free[0];
+}
+
 export function updateIncidents(g: Game, dts: number) {
   for (const inc of g.incidents) {
     if (inc.state === 'resolved') continue;
 
+    if (inc.type === 'pursuit') updatePursuit(g, inc, dts);
+    if ((inc.state as string) === 'resolved') continue; // updatePursuit may resolve it
+
     // queued too long → caller gives up
     if (inc.state === 'queued') {
+      // auto-dispatch policy
+      if (g.policy.autoDispatch !== 'off' &&
+          (g.policy.autoDispatch === 'all' || inc.priority === 1) &&
+          g.time - inc.created > 1.5) {
+        const sent = dispatchNearestOfficer(g, inc, g.control);
+        if (sent) addLog(g, `Auto-dispatch: ${sent.name} → ${inc.title}.`, 'info');
+      }
       const limit = inc.priority === 3 ? 10 : inc.priority === 2 ? 16 : 25; // game minutes
       if (g.time - inc.created > limit) {
         resolveIncident(g, inc, 'missed');
@@ -249,6 +343,18 @@ export function updateIncidents(g: Game, dts: number) {
       if (inc.resolveTimer <= 0) resolveScene(g, inc, present[0]);
     }
   }
+  // EMS / coroner: clear the wounded and dead once a scene is quiet
+  for (const c of g.civs) {
+    if (c.state !== 'down' || c.x < 0) continue;
+    const since = (c as any).downSince ?? ((c as any).downSince = g.time);
+    if (g.time - since < 6) continue;
+    const hot = g.incidents.some(i => i.state !== 'resolved' && dist(i, c) < 150 &&
+      i.suspects.some(id => { const s = civById(g, id); return s && s.state === 'hostile'; }));
+    if (hot) continue;
+    c.state = 'gone'; c.x = -999; c.y = -999;
+    addLog(g, c.injury === 'dead' ? `Coroner removed ${c.name}.` : `EMS transported ${c.name} to Bay General.`, c.injury === 'dead' ? 'bad' : 'info');
+  }
+
   // trim resolved + old
   if (g.incidents.length > 120) {
     g.incidents = g.incidents.filter(i => i.state !== 'resolved' || g.time - i.created < 600);

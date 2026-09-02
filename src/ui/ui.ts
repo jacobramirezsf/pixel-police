@@ -2,6 +2,7 @@ import type { Game, Incident, IncidentType, Officer } from '../sim/types';
 import { WEAPONS } from '../sim/data';
 import { clock, dayOf, civById, offById, vehById, dist } from '../sim/agents';
 import { HIRE_COST, CAR_COST } from '../sim/dept';
+import { soundEnabled, setSound } from '../sound';
 
 export interface UIApi {
   centerOn(x: number, y: number): void;
@@ -13,6 +14,7 @@ export interface UIApi {
   dispatchNearest(incId: number): void;
   patrolSelected(): void;
   holdSelected(): void;
+  orderDetain(civId: number): void;
   enterNearestCar(): void;
   exitCar(): void;
   toggleWeapon(): void;
@@ -88,6 +90,14 @@ export function refreshHUD() {
   hi.classList.toggle('hot', g.incidents.some(i => i.state !== 'resolved' && i.priority === 3));
   $('hud-clock').textContent = `Day ${dayOf(g.time)} ${clock(g.time)}`;
   for (const n of [0, 1, 2, 4]) $(`spd-${n}`).classList.toggle('on', g.speed === n);
+  // unanswered-call badge on the DISPATCH tab
+  const queued = g.incidents.filter(i => i.state === 'queued').length;
+  const db = $('toolbar').querySelector('[data-tab="dispatch"]') as HTMLElement;
+  let badge = db.querySelector('.badge') as HTMLElement | null;
+  if (queued > 0) {
+    if (!badge) { badge = document.createElement('i'); badge.className = 'badge'; db.appendChild(badge); }
+    badge.textContent = String(queued);
+  } else if (badge) badge.remove();
 }
 
 // ---------- tabs / panel ----------
@@ -208,6 +218,14 @@ function renderDept(p: HTMLElement) {
   }
   p.appendChild(arow);
 
+  p.appendChild(el(`<h3>POLICY</h3>`));
+  p.appendChild(el(`<div class="muted">Auto-dispatch sends the nearest free officer without asking you.</div>`));
+  const prow = el(`<div class="row"></div>`);
+  for (const [val, label] of [['off', 'MANUAL DISPATCH'], ['low', 'AUTO: LOW PRIORITY'], ['all', 'AUTO: ALL CALLS']] as const) {
+    prow.appendChild(btn(label, g.policy.autoDispatch === val ? 'on' : '', () => { g.policy.autoDispatch = val; renderPanel(); }));
+  }
+  p.appendChild(prow);
+
   p.appendChild(el(`<h3>ROSTER</h3>`));
   for (const o of g.officers) {
     const card = el(`<div class="card"><div class="grow"><b>${o.name}</b><div class="sub">shooting ${pct(o.shooting)} · driving ${pct(o.driving)} · talk ${pct(o.talk)} · complaints ${o.complaints} · $${o.salary}/day</div></div></div>`);
@@ -284,7 +302,7 @@ function renderSandbox(p: HTMLElement) {
   const i1 = el(`<div class="row"></div>`);
   const types: [IncidentType, string][] = [
     ['shoplift', 'SHOPLIFT'], ['fight', 'FIGHT'], ['burglary', 'BURGLARY'], ['robbery', 'ROBBERY'],
-    ['armed_robbery', 'ARMED ROBBERY'], ['shots', 'SHOTS FIRED'], ['bank_robbery', 'BANK ROBBERY'], ['shootout', 'LARGE SHOOTOUT'],
+    ['armed_robbery', 'ARMED ROBBERY'], ['shots', 'SHOTS FIRED'], ['pursuit', 'PURSUIT'], ['bank_robbery', 'BANK ROBBERY'], ['shootout', 'LARGE SHOOTOUT'],
   ];
   for (const [t, label] of types) i1.appendChild(btn(label, t === 'shootout' || t === 'bank_robbery' ? 'danger' : '', () => api.sandboxSpawn(t)));
   p.appendChild(i1);
@@ -306,6 +324,7 @@ function renderMore(p: HTMLElement) {
   row.appendChild(btn('SAVE', 'good', () => { api.saveGame(); }));
   row.appendChild(btn('LOAD', '', () => { if (!api.loadGame()) addAlert('No save found', 'warn'); }));
   row.appendChild(btn('NEW GAME', 'danger', () => { if (confirm('Start a new city? Unsaved progress is lost.')) api.newGame(); }));
+  row.appendChild(btn(`SOUND ${soundEnabled() ? 'ON' : 'OFF'}`, soundEnabled() ? 'on' : '', () => { setSound(!soundEnabled()); renderPanel(); }));
   p.appendChild(row);
   if (g.cheats.usedEver) p.appendChild(el(`<div class="muted">⚠ sandbox tools have been used — saves are marked as sandbox saves.</div>`));
   p.appendChild(el(`<h3>EVENT LOG</h3>`));
@@ -352,6 +371,9 @@ export function refreshCtxBar() {
     const knows = civ.known?.idShown;
     bar.appendChild(el(`<span class="ctx-label">${civ.name}</span>`));
     bar.appendChild(el(`<span class="ctx-label muted">${civ.injury !== 'healthy' ? civ.injury : knows ? (civ.warrant ? 'WARRANT!' : civ.record.length ? civ.record.join(', ') : 'no record') : 'civilian'}</span>`));
+    if (civ.state !== 'down' && civ.state !== 'arrested' && civ.state !== 'gone' && civ.state !== 'detained') {
+      add('DETAIN (send unit)', '', () => api.orderDetain(civ.id));
+    }
     add('✕', '', () => api.deselect());
   } else if (veh) {
     any = true;
