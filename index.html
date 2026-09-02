@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#181a1e" />
+  <title>Pixel Police Department</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23181a1e'/><rect x='3' y='3' width='10' height='10' fill='%232b57a8'/><rect x='6' y='6' width='4' height='4' fill='%23ffd94a'/></svg>" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+      <span id="hud-budget" title="Budget">$0</span>
+      <span id="hud-officers" title="Officers available">👮 0/0</span>
+      <span id="hud-incidents" title="Active incidents">🚨 0</span>
+      <span id="hud-clock">Day 1 07:00</span>
+      <span class="hud-spacer"></span>
+      <button id="spd-0" class="spd" title="Pause">⏸</button>
+      <button id="spd-1" class="spd on" title="Normal speed">1×</button>
+      <button id="spd-2" class="spd" title="Fast">2×</button>
+      <button id="spd-4" class="spd" title="Fastest">4×</button>
+      <button id="btn-clean" title="Hide interface">👁</button>
+    </div>
+
+    <div id="alerts"></div>
+
+    <div id="controlhud"></div>
+
+    <div id="joystick"><div id="joyknob"></div></div>
+    <div id="actionpad"></div>
+
+    <div id="bottomui">
+      <div id="ctxbar"></div>
+      <div id="panel"></div>
+      <div id="secondary"></div>
+      <div id="toolbar">
+        <button data-tab="dispatch">📻<span>DISPATCH</span></button>
+        <button data-tab="units">👮<span>UNITS</span></button>
+        <button data-tab="dept">🏢<span>DEPT</span></button>
+        <button data-tab="map">🗺️<span>MAP</span></button>
+        <button data-tab="sandbox">🧪<span>SANDBOX</span></button>
+        <button data-tab="more">☰<span>MORE</span></button>
+      </div>
+    </div>
+
+    <div id="cleanexit" class="hidden">tap to show controls</div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
