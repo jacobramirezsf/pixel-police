@@ -1,9 +1,9 @@
 import { TILE } from './types';
 import type { Game, Incident, IncidentType, Civilian, Officer, Pt } from './types';
 import { INCIDENT_TITLES, CRIMINAL_GUNS, WEAPONS } from './data';
-import { rng, ri, pick, hoodAt, randomSidewalkPoint, randomRoadPoint } from './world';
+import { rng, ri, pick, hoodAt, randomSidewalkPoint, randomRoadPoint, insideBuilding } from './world';
 import { makeCivilian, civById, dist, setPath, panicNear, enterVehicle, vehById, makeVehicle, offById } from './agents';
-import { addLog } from './dept';
+import { addLog, contractCallResolved, contractCallMissed } from './dept';
 
 let streetNo = 100;
 const addr = () => `${streetNo = (streetNo + ri(3, 41)) % 900 + 100} ${pick(['Oak', 'Bay', 'Cedar', 'Pine', 'Dock', 'Market', 'Hill', '3rd', '7th'])} St`;
@@ -18,7 +18,7 @@ export function createIncident(g: Game, type: IncidentType, x: number, y: number
   if (armed && rng() < 0.3) reportedArmed = false;          // caller missed the weapon
   if (!armed && rng() < 0.15) reportedArmed = true;         // caller thought they saw one
   const pr: 1 | 2 | 3 =
-    type === 'bank_robbery' || type === 'shootout' || type === 'shots' || type === 'armed_robbery' ? 3 :
+    type === 'bank_robbery' || type === 'shootout' || type === 'shots' || type === 'armed_robbery' || type === 'raid' || type === 'gang_attack' ? 3 :
     type === 'robbery' || type === 'fight' || type === 'burglary' || type === 'pursuit' || type === 'assault' ? 2 : 1;
   const nS = (opts.suspects ?? []).length;
   const inc: Incident = {
@@ -139,6 +139,88 @@ export function crimeTick(g: Game, dts: number) {
     const inc = createIncident(g, armed ? 'armed_robbery' : 'robbery', s.x, s.y, { suspects: [s.id], armed, building: b.id });
     inc.escalateAt = g.time + ri(10, 18);
   }
+}
+
+// ---------- gangs: territory pressure + strongholds ----------
+const inRect = (r: { x: number; y: number; w: number; h: number }, e: { x: number; y: number }) => {
+  const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
+  return tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h;
+};
+
+function armMember(m: Civilian) {
+  m.state = 'hostile';
+  if (!m.weapon) { m.weapon = 'knife'; m.ammo = 999; }
+  m.drawn = true;
+}
+
+export function updateGangs(g: Game, dts: number) {
+  for (const gg of g.world.gangs) {
+    if (gg.cleared) continue;
+    gg.hostility = Math.max(15, gg.hostility - dts * 0.004); // slow cool toward baseline
+
+    // officers on foot in territory get pressed when the block is hot
+    const threat = (gg.hostility - 40) / 60;
+    if (threat > 0) {
+      for (const o of g.officers) {
+        if (o.x < 0 || o.vehicle !== null || o.injury === 'dead' || o.state === 'hospital' || o.state === 'down') continue;
+        if (!inRect(gg.rect, o)) continue;
+        if (rng() > dts * threat * 0.06) continue;
+        const members = g.civs.filter(c => c.gang === gg.id &&
+          c.state !== 'down' && c.state !== 'arrested' && c.state !== 'gone' && c.state !== 'hostile' && c.state !== 'detained' &&
+          dist(c, o) < 240).slice(0, ri(1, 3));
+        if (!members.length) continue;
+        members.forEach(armMember);
+        const inc = createIncident(g, 'gang_attack', o.x, o.y, { suspects: members.map(m => m.id), armed: true, silent: true });
+        inc.state = 'assigned';
+        inc.reported = `${gg.name} members are attacking officers in their territory.`;
+        g.notify(`${gg.name} pressing ${o.name}!`, 'bad', o.x, o.y);
+        addLog(g, `${gg.name} attacked ${o.name} on their turf.`, 'bad');
+        gg.hostility = Math.min(100, gg.hostility + 4);
+        break; // one ambush per gang per tick is plenty
+      }
+    }
+
+    // walking into the stronghold uninvited wakes the defenders
+    const sh = g.world.buildings.find(b => b.id === gg.strongholdId);
+    if (sh) {
+      const intruder = g.officers.find(o => o.x > 0 && o.state !== 'hospital' && insideBuilding(g.world, o.x, o.y)?.id === sh.id);
+      if (intruder && rng() < dts * 0.4) {
+        const defenders = g.civs.filter(c => c.gang === gg.id &&
+          c.state !== 'down' && c.state !== 'arrested' && c.state !== 'gone' && c.state !== 'hostile' &&
+          dist(c, intruder) < 160).slice(0, 3);
+        if (defenders.length) {
+          defenders.forEach(armMember);
+          g.notify(`${gg.name} defending the stronghold!`, 'bad', intruder.x, intruder.y);
+        }
+      }
+    }
+  }
+}
+
+/** Planned stronghold raid — pulls members home to defend, creates a priority-3 scene. */
+export function startRaid(g: Game, gangId: number): Incident | null {
+  const gg = g.world.gangs[gangId];
+  if (!gg || gg.cleared) return null;
+  const sh = g.world.buildings.find(b => b.id === gg.strongholdId);
+  if (!sh) return null;
+  const members = g.civs.filter(c => c.gang === gg.id &&
+    c.state !== 'down' && c.state !== 'arrested' && c.state !== 'gone');
+  const defenders = members.slice(0, ri(4, 6));
+  defenders.forEach((m, i) => {
+    m.x = (sh.x + 1 + (i % Math.max(1, sh.w - 2))) * TILE + 8;
+    m.y = (sh.y + 1 + (Math.floor(i / Math.max(1, sh.w - 2)) % Math.max(1, sh.h - 2))) * TILE + 8;
+    m.state = 'crime'; m.path = null;
+    if (!m.weapon) { m.weapon = pick(CRIMINAL_GUNS); const wd = WEAPONS[m.weapon]; m.ammo = wd.mag; m.reserve = wd.mag * 2; }
+  });
+  const inc = createIncident(g, 'raid', sh.door.x * TILE + 8, (sh.door.y + 1) * TILE + 8, {
+    suspects: defenders.map(m => m.id), armed: true, building: sh.id, silent: true,
+  });
+  inc.reported = `Warrant service at the ${gg.name} stronghold. Expect armed resistance — intel says ${defenders.length} inside, could be more.`;
+  (inc as any).gangId = gangId;
+  gg.hostility = Math.min(100, gg.hostility + 20);
+  g.notify(`RAID AUTHORIZED: ${gg.name} stronghold`, 'bad', inc.x, inc.y);
+  addLog(g, `Raid launched on the ${gg.name} stronghold.`, 'warn');
+  return inc;
 }
 
 // ---------- vehicle pursuit ----------
@@ -348,6 +430,16 @@ export function updateIncidents(g: Game, dts: number) {
       if (inc.resolveTimer <= 0) resolveScene(g, inc, present[0]);
     }
   }
+  // fallen officers: end of watch after the scene quiets
+  for (const o of g.officers) {
+    if (o.injury !== 'dead' || o.x < 0) continue;
+    const since = (o as any).downSince ?? ((o as any).downSince = g.time);
+    if (g.time - since < 8) continue;
+    if (g.incidents.some(i => i.state !== 'resolved' && dist(i, o) < 150)) continue;
+    addLog(g, `End of watch: ${o.name}.`, 'bad');
+    g.officers = g.officers.filter(q => q.id !== o.id);
+  }
+
   // EMS / coroner: clear the wounded and dead once a scene is quiet
   for (const c of g.civs) {
     if (c.state !== 'down' || c.x < 0) continue;
@@ -393,7 +485,13 @@ function resolveScene(g: Game, inc: Incident, o: Officer) {
     return;
   }
 
-  if (live.length === 0 || live.every(s => dist(s, inc) > 300)) {
+  if (live.length === 0) {
+    // nobody left standing vs nobody found: different stories
+    const neutralized = suspects.some(s => s.state === 'down' || s.state === 'arrested' || s.state === 'detained' || s.injury === 'dead' || s.injury === 'incap');
+    resolveIncident(g, inc, neutralized ? 'cleared' : 'suspect gone');
+    return;
+  }
+  if (live.every(s => dist(s, inc) > 300)) {
     resolveIncident(g, inc, 'suspect gone');
     return;
   }
@@ -415,7 +513,9 @@ function resolveScene(g: Game, inc: Incident, o: Officer) {
   let anyAction = false;
   for (const s of live) {
     if (s.state === 'flee' || s.state === 'hostile') { anyAction = true; continue; }
-    const fightBias = (s.weapon ? 0.3 : 0.02) + s.aggression * 0.3 + (inc.type === 'bank_robbery' || inc.type === 'shootout' ? 0.35 : 0);
+    const fightBias = (s.weapon ? 0.3 : 0.02) + s.aggression * 0.3 +
+      (inc.type === 'bank_robbery' || inc.type === 'shootout' ? 0.35 : 0) +
+      (s.gang != null ? 0.2 : 0) + (inc.type === 'raid' ? 0.35 : 0);
     const fleeBias = 0.35 + (1 - s.bravery) * 0.2 + (inc.type === 'shoplift' || inc.type === 'burglary' ? 0.25 : 0);
     const r = rng();
     if (r < fightBias) {
@@ -457,14 +557,34 @@ export function resolveIncident(g: Game, inc: Incident, outcome: string) {
     if (s && s.state === 'fight') { s.state = 'idle'; s.incident = null; }
   }
 
+  // a finished raid that took everyone off the board clears the stronghold
+  if (inc.type === 'raid' && (outcome === 'arrest' || outcome === 'cleared')) {
+    const gid = (inc as any).gangId;
+    const gg = g.world.gangs[gid];
+    const remaining = inc.suspects.map(id => civById(g, id))
+      .filter(s => s && s.state !== 'arrested' && s.state !== 'detained' && s.state !== 'down' && s.state !== 'gone' && s.injury !== 'dead' && s.injury !== 'incap');
+    if (gg && !gg.cleared && remaining.length === 0) {
+      gg.cleared = true;
+      gg.hostility = 10;
+      h.crime = Math.max(0, h.crime - 12);
+      h.trust = Math.min(100, h.trust + 4);
+      // scatter surviving members — the block belongs to the city again
+      for (const c of g.civs) if (c.gang === gg.id && c.state !== 'arrested' && c.state !== 'down' && c.state !== 'gone') { c.gang = null; c.color = '#666a8f'; }
+      g.notify(`${gg.name} stronghold CLEARED`, 'good', inc.x, inc.y);
+      addLog(g, `The ${gg.name} stronghold has been cleared. Crime in ${h.name} is dropping.`, 'good');
+    }
+  }
+
   switch (outcome) {
     case 'missed':
       g.stats.callsMissed++;
+      contractCallMissed(g);
       if (!noCon) { h.trust = Math.max(0, h.trust - (inc.priority === 3 ? 5 : 2)); h.crime = Math.min(100, h.crime + 2); }
       addLog(g, `No unit responded to ${inc.title} in ${h.name}. Caller gave up.`, 'bad');
       break;
     case 'arrest':
       g.stats.callsResolved++;
+      contractCallResolved(g);
       if (!noCon) { h.trust = Math.min(100, h.trust + 1.5); h.crime = Math.max(0, h.crime - 1.5); }
       addLog(g, `${inc.title} resolved with an arrest.`, 'good');
       break;
@@ -475,10 +595,12 @@ export function resolveIncident(g: Game, inc: Incident, outcome: string) {
       break;
     case 'unfounded':
       g.stats.callsResolved++;
+      contractCallResolved(g);
       addLog(g, `${inc.title}: unfounded.`, 'info');
       break;
     default:
       g.stats.callsResolved++;
+      contractCallResolved(g);
       if (!noCon) h.trust = Math.min(100, h.trust + 0.5);
       addLog(g, `${inc.title} cleared.`, 'good');
   }

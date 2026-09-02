@@ -4,12 +4,12 @@ import type { Game, Officer, Civilian, IncidentType, Pt } from './sim/types';
 import { WEAPONS } from './sim/data';
 import { generateCity, tileAt, px2t, blocksMove, stationDoor, stationLot, rng, ri, setRng } from './sim/world';
 import {
-  spawnPopulation, makeOfficer, makeVehicle, makeCivilian, updateCivilian, updateOfficer, updateVehicle,
+  spawnPopulation, spawnGangs, makeOfficer, makeSwatOfficer, makeVehicle, makeCivilian, updateCivilian, updateOfficer, updateVehicle,
   civById, offById, vehById, dist, setPath, orderMove, orderPatrol, clearAssignment,
   enterVehicle, exitVehicle, finishArrest, nearestHostile,
 } from './sim/agents';
-import { crimeTick, updateIncidents, assignOfficer, spawnIncidentType, resolveIncident, dispatchNearestOfficer, spawnPursuit } from './sim/incidents';
-import { updateDept, addLog, HIRE_COST, CAR_COST } from './sim/dept';
+import { crimeTick, updateIncidents, updateGangs, startRaid, assignOfficer, spawnIncidentType, resolveIncident, dispatchNearestOfficer, spawnPursuit } from './sim/incidents';
+import { updateDept, updateGrowth, addLog, acceptContract, acceptSurplus, HIRE_COST, CAR_COST, SWAT_COST } from './sim/dept';
 import { fireAt, fireAtPoint, reload as reloadWeaponFn, applyDamage } from './sim/combat';
 import { buildBase, draw } from './render/render';
 import type { RenderOpts } from './render/render';
@@ -39,9 +39,12 @@ function newGameState(seed: number): Game {
     dayPaid: -1, protestUntil: 0, protestHood: 0,
     policy: { autoDispatch: 'off' },
     aim: null,
+    city: { council: 55, mayor: 55 },
+    contracts: [], surplus: [], swat: false,
     notify: (t, c, x, y) => addAlert(t, c, x, y),
   };
   spawnPopulation(g, 190, 20);
+  spawnGangs(g);
   for (let i = 0; i < 4; i++) makeOfficer(g);
   const sd = stationDoor(g.world);
   g.cam.x = sd.x; g.cam.y = sd.y;
@@ -67,7 +70,7 @@ window.addEventListener('resize', resize);
 resize();
 
 const renderOpts: RenderOpts = {
-  layers: { trust: false, crime: false, hoods: false, incidents: true, units: true },
+  layers: { trust: false, crime: false, hoods: false, incidents: true, units: true, gangs: true },
   cleanView: false,
 };
 
@@ -276,10 +279,55 @@ const api: UIApi = {
       case 'consequences': c.noConsequences = !c.noConsequences; break;
       case 'hour': g.time += 60; break;
       case 'clearcalls': for (const i of g.incidents) if (i.state !== 'resolved') resolveIncident(g, i, 'cleared'); break;
+      case 'freeswat': if (!g.swat) { const fs = c.freeStuff; c.freeStuff = true; api.unlockSwat(); c.freeStuff = fs; } break;
+      case 'gangmax': for (const gg of g.world.gangs) if (!gg.cleared) gg.hostility = 100; break;
+      case 'gangcool': for (const gg of g.world.gangs) gg.hostility = 15; break;
+      case 'contract': (g as any).nextContractAt = g.time; break;
     }
     refreshPanel();
   },
   deselect() { g.sel = { officers: [], vehicle: null, civilian: null, incident: null }; refreshCtxBar(); },
+  unlockSwat() {
+    if (g.swat) return;
+    const cost = g.cheats.freeStuff ? 0 : SWAT_COST;
+    if (g.budget < cost) { addAlert('Not enough budget for SWAT', 'warn'); return; }
+    g.budget -= cost;
+    g.swat = true;
+    for (let i = 0; i < 4; i++) makeSwatOfficer(g);
+    const lot = stationLot(g.world);
+    const van = makeVehicle(g, true, lot.x + 100, lot.y);
+    van.name = 'SWAT Van'; van.color = '#101014'; van.maxSpeed = 155;
+    addLog(g, 'SWAT team established: 4 tactical officers, one van.', 'good');
+    addAlert('SWAT TEAM READY', 'good');
+    refreshPanel();
+  },
+  deploySwat(incId) {
+    const inc = g.incidents.find(i => i.id === incId && i.state !== 'resolved');
+    if (!inc) return;
+    let n = 0;
+    for (const o of g.officers) {
+      if (o.unit !== 'swat' || o.injury === 'dead' || o.state === 'hospital' || o.id === g.control) continue;
+      assignOfficer(g, o, inc); n++;
+    }
+    if (n) { addAlert(`SWAT rolling to ${inc.title} (${n})`, 'bad'); g.sfx?.('alarm'); }
+    else addAlert('No SWAT officers fit for duty', 'warn');
+  },
+  raidGang(gangId) {
+    const inc = startRaid(g, gangId);
+    if (!inc) return;
+    if (g.swat) api.deploySwat(inc.id);
+    api.centerOn(inc.x, inc.y);
+    setTab(null);
+    g.sel = { officers: [], vehicle: null, civilian: null, incident: inc.id };
+  },
+  acceptContract(id) {
+    if (acceptContract(g, id)) addAlert('Contract accepted', 'good');
+  },
+  acceptSurplus(id) {
+    const err = acceptSurplus(g, id);
+    if (err) addAlert(err, 'warn');
+    else addAlert('Surplus accepted', 'good');
+  },
   setCleanView(v) {
     renderOpts.cleanView = v;
     for (const id of ['hud', 'bottomui', 'alerts', 'controlhud', 'joystick', 'actionpad']) {
@@ -651,8 +699,10 @@ function updatePlayerControl(dts: number) {
 const SAVE_KEY = 'pixelpolice.save.v1';
 function saveGame() {
   const data = {
-    v: 2, seed: g.world.seed, time: g.time, budget: g.budget, dayPaid: g.dayPaid,
+    v: 3, seed: g.world.seed, time: g.time, budget: g.budget, dayPaid: g.dayPaid,
     stats: g.stats, cheats: g.cheats, nextId: g.nextId, policy: g.policy,
+    city: g.city, contracts: g.contracts, surplus: g.surplus, swat: g.swat,
+    gangs: g.world.gangs.map(gg => ({ hostility: gg.hostility, cleared: gg.cleared })),
     hoods: g.world.hoods.map(h => ({ trust: h.trust, crime: h.crime, tension: h.tension })),
     officers: g.officers, vehicles: g.vehicles,
     civs: g.civs, log: g.log.slice(-100),
@@ -677,7 +727,12 @@ function loadGame(): boolean {
       sel: { officers: [], vehicle: null, civilian: null, incident: null },
       control: null, speed: 1, protestUntil: 0, protestHood: 0,
       policy: d.policy || { autoDispatch: 'off' },
+      city: d.city || { council: 55, mayor: 55 },
+      contracts: d.contracts || [], surplus: d.surplus || [], swat: !!d.swat,
     };
+    d.gangs?.forEach((sg: any, i: number) => {
+      if (g.world.gangs[i]) { g.world.gangs[i].hostility = sg.hostility; g.world.gangs[i].cleared = sg.cleared; }
+    });
     d.hoods?.forEach((h: any, i: number) => {
       if (g.world.hoods[i]) { g.world.hoods[i].trust = h.trust; g.world.hoods[i].crime = h.crime; g.world.hoods[i].tension = h.tension; }
     });
@@ -710,6 +765,8 @@ function frame(now: number) {
     g.time += dts; // 1 game minute per scaled second
     crimeTick(g, dts);
     updateIncidents(g, dts);
+    updateGangs(g, dts);
+    updateGrowth(g, dts);
     for (const c of g.civs) updateCivilian(g, c, dts);
     for (const o of g.officers) updateOfficer(g, o, dts);
     for (const v of g.vehicles) updateVehicle(g, v, dts);

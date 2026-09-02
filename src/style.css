@@ -163,6 +163,10 @@ button:disabled { opacity: 0.4; }
 .muted { color: #71747e; font-size: 10px; }
 .logline { padding: 2px 0; border-bottom: 1px dotted #2a2c33; font-size: 10px; }
 .logline.bad { color: #ff9c9c; } .logline.good { color: #9cffb8; } .logline.warn { color: #ffce8a; }
+.meter-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 10px; }
+.meter-label { width: 62px; color: #8a8d98; letter-spacing: 0.5px; }
+.meter { flex: 1; height: 8px; background: #14151a; border: 1px solid #2e313a; }
+.meter i { display: block; height: 100%; }
 
 /* ---------- direct control ---------- */
 #controlhud {

@@ -5,7 +5,7 @@ import { hourOf, civById, offById } from '../sim/agents';
 import { WEAPONS } from '../sim/data';
 
 export interface RenderOpts {
-  layers: { trust: boolean; crime: boolean; hoods: boolean; incidents: boolean; units: boolean };
+  layers: { trust: boolean; crime: boolean; hoods: boolean; incidents: boolean; units: boolean; gangs: boolean };
   cleanView: boolean;
 }
 
@@ -132,6 +132,37 @@ export function draw(ctx: CanvasRenderingContext2D, g: Game, opts: RenderOpts, W
   ctx.translate(-cam.x, -cam.y);
 
   if (base) ctx.drawImage(base, 0, 0);
+
+  // gang territory overlay
+  if (opts.layers.gangs) {
+    for (const gg of g.world.gangs) {
+      if (gg.cleared) continue;
+      const r = gg.rect;
+      const heat = gg.hostility / 100;
+      ctx.fillStyle = gg.color + Math.round(14 + heat * 22).toString(16).padStart(2, '0');
+      ctx.fillRect(r.x * TILE, r.y * TILE, r.w * TILE, r.h * TILE);
+      ctx.strokeStyle = gg.color;
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(r.x * TILE + 1, r.y * TILE + 1, r.w * TILE - 2, r.h * TILE - 2);
+      ctx.setLineDash([]);
+      const sh = g.world.buildings.find(b => b.id === gg.strongholdId);
+      if (sh) {
+        const sx = (sh.x + sh.w / 2) * TILE, sy = sh.y * TILE - 4;
+        ctx.fillStyle = gg.color;
+        ctx.font = 'bold 8px monospace';
+        ctx.fillText('▼', sx - 3, sy);
+        if (cam.zoom >= 1.1) {
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          const label = `${gg.name} · ${Math.round(gg.hostility)}`;
+          ctx.fillRect(sx - label.length * 2.4 - 3, sy - 18, label.length * 4.8 + 6, 10);
+          ctx.fillStyle = gg.color;
+          ctx.font = '7px monospace';
+          ctx.fillText(label, sx - label.length * 2.4, sy - 10);
+        }
+      }
+    }
+  }
 
   // heatmap layers
   if (opts.layers.trust || opts.layers.crime || opts.layers.hoods) {
@@ -407,7 +438,9 @@ function drawEntities(g: Game, ctx: CanvasRenderingContext2D, revealed: Set<numb
       ctx.fillRect(o.x + 3, o.y - 2, 3, 3);
       continue;
     }
-    drawPerson(ctx, o.x, o.y - personBob(o), '#2b57a8', '#d8b28c', true);
+    const swat = o.unit === 'swat';
+    drawPerson(ctx, o.x, o.y - personBob(o), swat ? '#23252e' : '#2b57a8', swat ? '#3a3d46' : '#d8b28c', true);
+    if (swat) { ctx.fillStyle = '#e8e8ee'; ctx.fillRect(o.x - 1, o.y - 2, 2, 2); }
     if (o.drawn) { ctx.fillStyle = '#111'; ctx.fillRect(o.x + 2, o.y - 2, 5, 2); }
     if (!opts.cleanView) {
       const selected = g.sel.officers.includes(o.id);

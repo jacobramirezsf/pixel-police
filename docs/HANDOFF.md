@@ -64,6 +64,16 @@ Jacob's feedback: controls clunky, incidents too fast to respond to, world not a
 - **Liveliness**: 190 civs + 20 cars; crosswalk zebras, benches/hydrants/lampposts (`world.props`, lamps glow at night); chat "…" pairs, bar "♪", panic "!" emotes; dog walkers (12%); park loitering; bar trips 19:00-02:00; stuck-car honks.
 - Debug note: an "impossible" miss streak in hit testing was bullets legitimately stopping on tree tiles / crowd bodies — check the ray environment before suspecting the math.
 
+## Pass 4 (territory + SWAT + department growth, Sep 2 2026)
+
+Mobile-first is the explicit priority for all controls/UX (Jacob's directive).
+
+- **Gang territory** (`world.gangs`, gen in world.ts; pressure in `updateGangs`): two gangs (Dockside 9 / Eastside Kings), each with a stronghold building ("the projects") and a territory rect. Hostility (15–100) rises on member arrests (+12), woundings (+8), killings (+25), raids (+20); cools slowly. Above ~40, officers on foot in territory get jumped (`gang_attack` p3 incidents); entering the stronghold wakes armed defenders. Members hold their block, wear gang colors, mostly armed.
+- **SWAT**: ESTABLISH SWAT TEAM in DEPT→GROW ($6k) → 4 heavy officers (carbines, armor ×0.55 damage, dark sprites) + van. Deploy per-call (SWAT button on p2+ dispatch cards / incident ctx), whole-team select in UNITS, RAID STRONGHOLD per gang. Raid = p3 incident with 4-6 defenders pulled inside; clearing it (all neutralized/held) flips `gang.cleared` → crime drop, members disband, contract payout.
+- **Map overlay**: GANG TURF layer (on by default) — tinted dashed territory + stronghold label w/ live heat.
+- **Growth loop** (dept.ts): city relations (`g.city.council/mayor`, daily drift from resolved/missed/lawsuits/deaths/trust), council scales daily funding 0.6×–1.4×; **contracts** (patrol hours / crime reduction / response guarantee / stronghold raid) offered every ~1 day, accept in DEPT→CONTRACTS, pay $900–$3.8k; **surplus** offers when mayor >45 (grant, cheap car, carbines, vests=armor 0.8). DEPT panel is sub-tabbed: OVERVIEW / GROW / CONTRACTS / CITY HALL, all thumb-sized rows.
+- **Bugs fixed**: enterVehicle tolerance mismatch left responders stuck 'driving' with no car (self-heals now); A* iter cap 9000→22000 (long paths failed); drive-path failure now ditches the car and walks; all-suspects-down resolved as 'suspect gone' instead of 'cleared'; dead officers now get End of Watch + roster removal.
+
 ## Deploy
 
 GitHub Pages via `.github/workflows/ci.yml` (same as PixelWar): push to main → typecheck, build, deploy.

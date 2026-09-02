@@ -1,7 +1,7 @@
 import type { Game, Incident, IncidentType, Officer } from '../sim/types';
-import { WEAPONS } from '../sim/data';
+import { WEAPONS, HOOD_NAMES } from '../sim/data';
 import { clock, dayOf, civById, offById, vehById, dist } from '../sim/agents';
-import { HIRE_COST, CAR_COST } from '../sim/dept';
+import { HIRE_COST, CAR_COST, SWAT_COST } from '../sim/dept';
 import { soundEnabled, setSound } from '../sound';
 
 export interface UIApi {
@@ -32,7 +32,12 @@ export interface UIApi {
   sandboxSpawn(type: IncidentType): void;
   sandbox(action: string): void;
   deselect(): void;
-  layers: { trust: boolean; crime: boolean; hoods: boolean; incidents: boolean; units: boolean };
+  unlockSwat(): void;
+  deploySwat(incId: number): void;
+  raidGang(gangId: number): void;
+  acceptContract(id: number): void;
+  acceptSurplus(id: number): void;
+  layers: { trust: boolean; crime: boolean; hoods: boolean; incidents: boolean; units: boolean; gangs: boolean };
   setCleanView(v: boolean): void;
   multiSelectMode: boolean;
 }
@@ -41,6 +46,7 @@ let g: Game;
 let api: UIApi;
 let activeTab: string | null = null;
 let dispatchSub = 'active';
+let deptSub = 'overview';
 const $ = (id: string) => document.getElementById(id)!;
 
 export function initUI(game: Game, a: UIApi) {
@@ -169,10 +175,24 @@ function incidentCard(inc: Incident): HTMLElement {
   card.appendChild(btn('VIEW', '', () => { g.sel.incident = inc.id; api.centerOn(inc.x, inc.y); }));
   if (g.sel.officers.length) card.appendChild(btn('SEND SEL', 'good', () => api.dispatchSelected(inc.id)));
   card.appendChild(btn('NEAREST', '', () => api.dispatchNearest(inc.id)));
+  if (g.swat && inc.priority >= 2) card.appendChild(btn('SWAT', 'danger', () => api.deploySwat(inc.id)));
   return card;
 }
 
 function renderUnits(p: HTMLElement) {
+  if (g.swat) {
+    p.appendChild(el(`<h3>SWAT TEAM</h3>`));
+    const srow = el(`<div class="row"></div>`);
+    srow.appendChild(btn('SELECT TEAM', 'on', () => {
+      g.sel = { officers: g.officers.filter(o => o.unit === 'swat' && o.injury !== 'dead' && o.state !== 'hospital').map(o => o.id), vehicle: null, civilian: null, incident: null };
+      const first = offById(g, g.sel.officers[0]);
+      if (first) api.centerOn(first.x, first.y);
+      refreshCtxBar();
+    }));
+    const inc = g.incidents.find(i => i.id === g.sel.incident && i.state !== 'resolved');
+    if (inc) srow.appendChild(btn('DEPLOY → SELECTED CALL', 'danger', () => api.deploySwat(inc.id)));
+    p.appendChild(srow);
+  }
   p.appendChild(el(`<h3>OFFICERS</h3>`));
   const rowAll = el(`<div class="row"></div>`);
   rowAll.appendChild(btn('SELECT ALL', '', () => api.selectAllOfficers()));
@@ -199,39 +219,44 @@ function renderUnits(p: HTMLElement) {
 }
 
 function renderDept(p: HTMLElement) {
-  p.appendChild(el(`<h3>BUDGET</h3>`));
-  const payroll = g.officers.reduce((s, o) => s + o.salary, 0);
-  p.appendChild(el(`<div class="sub">Balance <b style="color:#ffd94a">$${Math.round(g.budget).toLocaleString()}</b> · daily payroll $${payroll} · daily city funding depends on trust</div>`));
+  // sub-tabs: mobile-first horizontal row
   const row = el(`<div class="row"></div>`);
-  row.appendChild(btn(`HIRE OFFICER ($${HIRE_COST})`, '', () => api.hire()));
-  row.appendChild(btn(`BUY PATROL CAR ($${CAR_COST})`, '', () => api.buyCar()));
-  p.appendChild(row);
-
-  p.appendChild(el(`<h3>ARMORY</h3>`));
-  p.appendChild(el(`<div class="muted">Buy for the selected officer (${g.sel.officers.length ? offById(g, g.sel.officers[0])?.name : 'none selected'})</div>`));
-  const arow = el(`<div class="row"></div>`);
-  for (const wid of ['p9', 'p45', 'shotgun', 'carbine', 'taser', 'beanbag']) {
-    const w = WEAPONS[wid];
-    arow.appendChild(btn(`${w.name} $${g.cheats.freeStuff ? 0 : w.price}`, '', () => {
-      if (g.sel.officers.length) api.buyWeapon(g.sel.officers[0], wid);
-    }));
+  for (const [key, label] of [['overview', 'OVERVIEW'], ['grow', 'GROW'], ['contracts', 'CONTRACTS'], ['city', 'CITY HALL']]) {
+    row.appendChild(btn(label, deptSub === key ? 'on' : '', () => { deptSub = key; renderPanel(); }));
   }
-  p.appendChild(arow);
+  p.appendChild(row);
+  if (deptSub === 'overview') renderDeptOverview(p);
+  else if (deptSub === 'grow') renderDeptGrow(p);
+  else if (deptSub === 'contracts') renderDeptContracts(p);
+  else renderDeptCity(p);
+}
+
+function meter(label: string, v: number, color: string): HTMLElement {
+  return el(`<div class="meter-row"><span class="meter-label">${label}</span>
+    <span class="meter"><i style="width:${Math.round(v)}%;background:${color}"></i></span>
+    <b>${Math.round(v)}</b></div>`);
+}
+
+function renderDeptOverview(p: HTMLElement) {
+  const payroll = g.officers.reduce((s, o) => s + o.salary, 0);
+  const avgTrust = g.world.hoods.reduce((s, h) => s + h.trust, 0) / 4;
+  const funding = Math.round((350 + avgTrust * 5) * (0.6 + (g.city.council / 100) * 0.8));
+  p.appendChild(el(`<h3>BUDGET</h3>`));
+  p.appendChild(el(`<div class="sub">Balance <b style="color:#ffd94a">$${Math.round(g.budget).toLocaleString()}</b> · tomorrow ≈ +$${funding} funding − $${payroll} payroll</div>`));
+  p.appendChild(meter('COUNCIL', g.city.council, '#7fb0e0'));
+  p.appendChild(meter('MAYOR', g.city.mayor, '#c9a2e0'));
+  const active = g.contracts.filter(c => c.state === 'active').length;
+  const offered = g.contracts.filter(c => c.state === 'offered').length;
+  if (offered) p.appendChild(el(`<div class="sub" style="color:#9cffb8">${offered} contract offer(s) waiting → CONTRACTS tab</div>`));
+  if (active) p.appendChild(el(`<div class="sub">${active} contract(s) in progress</div>`));
+  if (g.surplus.length) p.appendChild(el(`<div class="sub" style="color:#9cffb8">${g.surplus.length} surplus offer(s) → CITY HALL tab</div>`));
 
   p.appendChild(el(`<h3>POLICY</h3>`));
-  p.appendChild(el(`<div class="muted">Auto-dispatch sends the nearest free officer without asking you.</div>`));
   const prow = el(`<div class="row"></div>`);
   for (const [val, label] of [['off', 'MANUAL DISPATCH'], ['low', 'AUTO: LOW PRIORITY'], ['all', 'AUTO: ALL CALLS']] as const) {
     prow.appendChild(btn(label, g.policy.autoDispatch === val ? 'on' : '', () => { g.policy.autoDispatch = val; renderPanel(); }));
   }
   p.appendChild(prow);
-
-  p.appendChild(el(`<h3>ROSTER</h3>`));
-  for (const o of g.officers) {
-    const card = el(`<div class="card"><div class="grow"><b>${o.name}</b><div class="sub">shooting ${pct(o.shooting)} · driving ${pct(o.driving)} · talk ${pct(o.talk)} · complaints ${o.complaints} · $${o.salary}/day</div></div></div>`);
-    card.appendChild(btn('FIRE', 'danger', () => api.fire(o.id)));
-    p.appendChild(card);
-  }
 
   p.appendChild(el(`<h3>DEPARTMENT RECORD</h3>`));
   const s = g.stats;
@@ -246,7 +271,91 @@ function renderDept(p: HTMLElement) {
   </div>`));
   p.appendChild(el(`<h3>NEIGHBORHOODS</h3>`));
   for (const h of g.world.hoods) {
-    p.appendChild(el(`<div class="sub">${h.name}: trust <b>${Math.round(h.trust)}</b> · crime ${Math.round(h.crime)} · tension ${Math.round(h.tension)}</div>`));
+    const gg = g.world.gangs.find(q => q.hood === h.id && !q.cleared);
+    p.appendChild(el(`<div class="sub">${h.name}: trust <b>${Math.round(h.trust)}</b> · crime ${Math.round(h.crime)} · tension ${Math.round(h.tension)}${gg ? ` · <span style="color:${gg.color}">${gg.name} heat ${Math.round(gg.hostility)}</span>` : ''}</div>`));
+  }
+}
+
+function renderDeptGrow(p: HTMLElement) {
+  p.appendChild(el(`<h3>PERSONNEL & FLEET</h3>`));
+  const row = el(`<div class="row"></div>`);
+  row.appendChild(btn(`HIRE OFFICER ($${g.cheats.freeStuff ? 0 : HIRE_COST})`, 'good', () => api.hire()));
+  row.appendChild(btn(`BUY PATROL CAR ($${g.cheats.freeStuff ? 0 : CAR_COST})`, '', () => api.buyCar()));
+  p.appendChild(row);
+
+  p.appendChild(el(`<h3>SWAT</h3>`));
+  if (!g.swat) {
+    p.appendChild(el(`<div class="sub">Stand up a 4-officer tactical team with carbines, heavy armor, and a van. For strongholds, barricades, and the calls patrol can't win.</div>`));
+    p.appendChild(btn(`ESTABLISH SWAT TEAM ($${g.cheats.freeStuff ? 0 : SWAT_COST})`, 'good', () => api.unlockSwat()));
+  } else {
+    const team = g.officers.filter(o => o.unit === 'swat');
+    p.appendChild(el(`<div class="sub">Team of ${team.length} · ${team.filter(o => o.state !== 'hospital' && o.injury !== 'dead').length} fit for duty. Deploy from a call's SWAT button, or raid below.</div>`));
+    for (const gg of g.world.gangs) {
+      if (gg.cleared) { p.appendChild(el(`<div class="sub" style="color:#9cffb8">${gg.name} stronghold — CLEARED</div>`)); continue; }
+      const card = el(`<div class="card"><div class="grow"><b style="color:${gg.color}">${gg.name}</b><div class="sub">${HOOD_NAMES[gg.hood]} · heat ${Math.round(gg.hostility)}/100</div></div></div>`);
+      card.appendChild(btn('RAID STRONGHOLD', 'danger', () => { if (confirm(`Raid the ${gg.name} stronghold? Expect a fight.`)) api.raidGang(gg.id); }));
+      p.appendChild(card);
+    }
+  }
+
+  p.appendChild(el(`<h3>ARMORY</h3>`));
+  p.appendChild(el(`<div class="muted">Buy for the selected officer (${g.sel.officers.length ? offById(g, g.sel.officers[0])?.name : 'none selected'})</div>`));
+  const arow = el(`<div class="row"></div>`);
+  for (const wid of ['p9', 'p45', 'shotgun', 'carbine', 'taser', 'beanbag']) {
+    const w = WEAPONS[wid];
+    arow.appendChild(btn(`${w.name} $${g.cheats.freeStuff ? 0 : w.price}`, '', () => {
+      if (g.sel.officers.length) api.buyWeapon(g.sel.officers[0], wid);
+    }));
+  }
+  p.appendChild(arow);
+
+  p.appendChild(el(`<h3>ROSTER</h3>`));
+  for (const o of g.officers) {
+    const card = el(`<div class="card"><div class="grow"><b>${o.unit === 'swat' ? '🛡 ' : ''}${o.name}</b><div class="sub">shooting ${pct(o.shooting)} · talk ${pct(o.talk)} · ${o.weapon ? WEAPONS[o.weapon].name : 'unarmed'}${o.armor ? ' · vest' : ''} · complaints ${o.complaints} · $${o.salary}/day</div></div></div>`);
+    card.appendChild(btn('FIRE', 'danger', () => api.fire(o.id)));
+    p.appendChild(card);
+  }
+}
+
+function renderDeptContracts(p: HTMLElement) {
+  p.appendChild(el(`<h3>CITY CONTRACTS</h3>`));
+  const offered = g.contracts.filter(c => c.state === 'offered');
+  const active = g.contracts.filter(c => c.state === 'active');
+  const past = g.contracts.filter(c => c.state === 'done' || c.state === 'failed').slice(-6).reverse();
+  if (!offered.length && !active.length) p.appendChild(el(`<div class="muted">No contracts on the table. City hall offers work when they think you can deliver — keep resolving calls.</div>`));
+  for (const ct of offered) {
+    const card = el(`<div class="card"><div class="grow"><b style="color:#ffd94a">$${ct.reward.toLocaleString()}</b> — <b>${ct.title}</b><div class="sub">${ct.desc}</div><div class="sub">Offer expires D${dayOf(ct.offeredUntil)} ${clock(ct.offeredUntil)}</div></div></div>`);
+    card.appendChild(btn('ACCEPT', 'good', () => { api.acceptContract(ct.id); renderPanel(); }));
+    p.appendChild(card);
+  }
+  for (const ct of active) {
+    const prog = ct.kind === 'patrol' ? `${Math.round(ct.progress)}/${ct.target} min patrolled`
+      : ct.kind === 'response' ? `${ct.progress}/${ct.target} calls resolved`
+      : ct.kind === 'crime' ? `crime now ${Math.round(g.world.hoods[ct.hood].crime)}, need ≤ ${ct.target}`
+      : g.world.gangs[ct.gang]?.cleared ? 'cleared!' : 'stronghold still active';
+    p.appendChild(el(`<div class="card"><div class="grow"><b>${ct.title}</b> <span class="sub">$${ct.reward.toLocaleString()}</span><div class="sub">${prog} · due D${dayOf(ct.deadline)} ${clock(ct.deadline)}</div></div></div>`));
+  }
+  if (past.length) p.appendChild(el(`<h3>HISTORY</h3>`));
+  for (const ct of past) {
+    p.appendChild(el(`<div class="sub" style="color:${ct.state === 'done' ? '#9cffb8' : '#ff9c9c'}">${ct.state === 'done' ? '✓' : '✗'} ${ct.title} — $${ct.reward.toLocaleString()}</div>`));
+  }
+}
+
+function renderDeptCity(p: HTMLElement) {
+  p.appendChild(el(`<h3>CITY HALL</h3>`));
+  p.appendChild(meter('COUNCIL', g.city.council, '#7fb0e0'));
+  p.appendChild(meter('MAYOR', g.city.mayor, '#c9a2e0'));
+  p.appendChild(el(`<div class="sub">Council sets your daily funding (0.6×–1.4×). The mayor unlocks grants and surplus gear. Resolving calls and finishing contracts builds both; missed calls, lawsuits, and dead civilians burn them fast.</div>`));
+  p.appendChild(el(`<h3>GOVERNMENT SURPLUS</h3>`));
+  if (!g.surplus.length) p.appendChild(el(`<div class="muted">Nothing on offer right now. Offers show up when the mayor likes you (above ~45).</div>`));
+  for (const of2 of g.surplus) {
+    const card = el(`<div class="card"><div class="grow"><b>${of2.title}</b> ${of2.cost ? `<span class="sub">$${of2.cost}</span>` : '<span class="sub" style="color:#9cffb8">FREE</span>'}<div class="sub">${of2.desc}</div><div class="sub">Expires D${dayOf(of2.expires)} ${clock(of2.expires)}</div></div></div>`);
+    card.appendChild(btn('ACCEPT', 'good', () => { api.acceptSurplus(of2.id); renderPanel(); }));
+    p.appendChild(card);
+  }
+  p.appendChild(el(`<h3>GANG TERRITORY</h3>`));
+  for (const gg of g.world.gangs) {
+    p.appendChild(el(`<div class="sub"><b style="color:${gg.color}">${gg.name}</b> — ${HOOD_NAMES[gg.hood]} · ${gg.cleared ? '<span style="color:#9cffb8">stronghold cleared</span>' : `heat ${Math.round(gg.hostility)}/100 — ${gg.hostility > 60 ? 'officers WILL be attacked on their turf' : gg.hostility > 40 ? 'officers get pressed on their turf' : 'quiet for now'}`}</div>`));
   }
 }
 
@@ -260,7 +369,7 @@ function renderMap(p: HTMLElement) {
     const b = btn(label, L[key] ? 'on' : '', () => { L[key] = !L[key]; renderPanel(); });
     row.appendChild(b);
   };
-  mk('incidents', 'INCIDENTS'); mk('units', 'UNIT TAGS'); mk('trust', 'TRUST'); mk('crime', 'CRIME'); mk('hoods', 'DISTRICTS');
+  mk('incidents', 'INCIDENTS'); mk('units', 'UNIT TAGS'); mk('gangs', 'GANG TURF'); mk('trust', 'TRUST'); mk('crime', 'CRIME'); mk('hoods', 'DISTRICTS');
   p.appendChild(row);
   p.appendChild(el(`<h3>JUMP TO</h3>`));
   const jrow = el(`<div class="row"></div>`);
@@ -296,7 +405,14 @@ function renderSandbox(p: HTMLElement) {
   o.appendChild(btn('SPAWN OFFICER', '', () => api.sandbox('spawnofficer')));
   o.appendChild(btn('SPAWN PATROL CAR', '', () => api.sandbox('spawncar')));
   o.appendChild(btn('MAX MORALE', '', () => api.sandbox('maxmorale')));
+  o.appendChild(btn(g.swat ? 'SWAT ✓' : 'FREE SWAT TEAM', g.swat ? 'on' : '', () => api.sandbox('freeswat')));
   p.appendChild(o);
+  p.appendChild(el(`<h3>GANGS</h3>`));
+  const grow2 = el(`<div class="row"></div>`);
+  grow2.appendChild(btn('MAX GANG HEAT', 'danger', () => api.sandbox('gangmax')));
+  grow2.appendChild(btn('COOL GANGS', '', () => api.sandbox('gangcool')));
+  grow2.appendChild(btn('+$ CONTRACT NOW', '', () => api.sandbox('contract')));
+  p.appendChild(grow2);
 
   p.appendChild(el(`<h3>SPAWN INCIDENT (at screen center)</h3>`));
   const i1 = el(`<div class="row"></div>`);

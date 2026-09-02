@@ -173,6 +173,7 @@ export function subdue(g: Game, tgt: Fighter, by: Fighter) {
 
 export function applyDamage(g: Game, tgt: Fighter, dmg: number, by: Fighter | null, lethal: boolean, stray = false) {
   if (isOfficer(tgt) && g.cheats.god && g.control === tgt.id) return;
+  if (isOfficer(tgt) && (tgt as Officer).armor) dmg *= (tgt as Officer).armor!;
   tgt.hp -= dmg;
   g.sfx?.('thud', tgt.x, tgt.y);
   const prev = tgt.injury;

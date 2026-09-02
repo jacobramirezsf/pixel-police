@@ -81,6 +81,43 @@ export function makeVehicle(g: Game, police: boolean, x: number, y: number): Veh
   return v;
 }
 
+export function spawnGangs(g: Game) {
+  for (const gg of g.world.gangs) {
+    for (let i = 0; i < 8; i++) {
+      const tx = gg.rect.x + ri(1, gg.rect.w - 2), ty = gg.rect.y + ri(1, gg.rect.h - 2);
+      const c = makeCivilian(g, tx * TILE + 8, ty * TILE + 8, gg.hood);
+      c.gang = gg.id;
+      c.lawful = 0.05 + rng() * 0.2;
+      c.aggression = 0.45 + rng() * 0.4;
+      c.bravery = 0.5 + rng() * 0.45;
+      c.color = gg.color;
+      c.dog = false;
+      c.record.push(`known ${gg.name} affiliation`);
+      if (rng() < 0.65 && !c.weapon) {
+        c.weapon = pick(['chandgun', 'revolver', 'cshotgun', 'knife']);
+        const wd = WEAPONS[c.weapon]; c.ammo = wd.mag; c.reserve = wd.mag * 2;
+      }
+    }
+  }
+}
+
+export function makeSwatOfficer(g: Game): Officer {
+  const o = makeOfficer(g);
+  o.name = `SWAT ${pick(LAST)}`;
+  o.unit = 'swat';
+  o.armor = 0.55;
+  o.shooting = 0.75 + rng() * 0.2;
+  o.talk = 0.4 + rng() * 0.3;
+  o.speed = 52;
+  o.salary = 140;
+  o.morale = 85;
+  o.trait = pick(['stack lead', 'breacher', 'marksman', 'shield carrier']);
+  o.weapon = 'carbine';
+  o.ammo = WEAPONS.carbine.mag; o.reserve = WEAPONS.carbine.mag * 3;
+  o.color = '#181a22';
+  return o;
+}
+
 export function spawnPopulation(g: Game, count: number, cars: number) {
   for (let i = 0; i < count; i++) {
     const hood = ri(0, 3);
@@ -176,6 +213,20 @@ export function updateCivilian(g: Game, c: Civilian, dts: number) {
         return;
       }
       const h = hourOf(g.time);
+      // gang members hold their block
+      if (c.gang != null) {
+        const gg = g.world.gangs[c.gang];
+        if (gg && !gg.cleared) {
+          const sh = g.world.buildings.find(b => b.id === gg.strongholdId);
+          const inside = sh && rng() < 0.3;
+          const to = inside && sh
+            ? { x: (sh.x + 1 + ri(0, Math.max(0, sh.w - 3))) * TILE + 8, y: (sh.y + 1 + ri(0, Math.max(0, sh.h - 3))) * TILE + 8 }
+            : { x: (gg.rect.x + ri(1, gg.rect.w - 2)) * TILE + 8, y: (gg.rect.y + ri(1, gg.rect.h - 2)) * TILE + 8 };
+          if (setPath(g, c, to)) { c.state = 'walk'; c.waitUntil = g.time + ri(4, 14); }
+          else c.waitUntil = g.time + 5;
+          return;
+        }
+      }
       // stop and chat with someone standing nearby
       if (rng() < 0.22) {
         const buddy = g.civs.find(q => q !== c && q.state === 'idle' && q.x > 0 && q.incident === null &&
@@ -328,15 +379,22 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
       if (wantCar != null) {
         const car = vehById(g, wantCar);
         if (!car || car.driver !== null) { (o as any).wantCar = null; o.path = null; }
-        else if (dist(o, car) < 34) {
+        else if (dist(o, car) < 30 && enterVehicle(g, o, car)) {
           (o as any).wantCar = null;
-          enterVehicle(g, o, car);
           car.lights = inc.priority >= 2;
           setPath(g, car, { x: inc.x, y: inc.y }, true);
           o.state = 'driving';
           break;
         } else {
-          if (!o.path || o.path.length === 0) setPath(g, o, { x: car.x, y: car.y });
+          if (!o.path || o.path.length === 0) {
+            if (!setPath(g, o, { x: car.x, y: car.y })) {
+              // can't path to the car — walk straight at it, it's close
+              const dd = dist(o, car) || 1;
+              o.x += ((car.x - o.x) / dd) * o.speed * 1.5 * dts;
+              o.y += ((car.y - o.y) / dd) * o.speed * 1.5 * dts;
+              break;
+            }
+          }
           moveAlong(o, dts, o.speed * 1.7);
           break;
         }
@@ -408,7 +466,12 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
     }
     case 'driving': {
       const v = vehById(g, o.vehicle);
-      if (!v) { o.state = 'idle'; break; }
+      if (!v) { // never actually got a car — self-heal back into the response
+        o.vehicle = null;
+        o.state = o.incident !== null ? 'responding' : 'idle';
+        o.path = null;
+        break;
+      }
       // vehicle sim handles motion; check arrival
       if (o.incident !== null) {
         const inc = g.incidents.find(i => i.id === o.incident);
@@ -419,7 +482,12 @@ export function updateOfficer(g: Game, o: Officer, dts: number) {
           o.state = 'responding';
           setPath(g, o, { x: inc.x, y: inc.y });
         } else if (inc && !v.path && dist(v, inc) >= 60) {
-          setPath(g, v, { x: inc.x, y: inc.y }, true);
+          if (!setPath(g, v, { x: inc.x, y: inc.y }, true)) {
+            // no drivable route (scene deep in a block) — ditch the car and hoof it
+            exitVehicle(g, o);
+            o.state = 'responding';
+            setPath(g, o, { x: inc.x, y: inc.y });
+          }
         }
         if (!inc || inc.state === 'resolved') { o.incident = null; o.state = 'driving'; v.lights = false; v.path = null; }
       } else if (v.path && v.path.length === 0) {
@@ -441,6 +509,13 @@ export function finishArrest(g: Game, o: Officer, s: Civilian) {
   s.x = -999; s.y = -999; // in holding
   o.escorting = null; o.state = 'idle'; o.path = null;
   o.arrests++; g.stats.arrests++;
+  if (s.gang != null) {
+    const gg = g.world.gangs[s.gang];
+    if (gg && !gg.cleared) {
+      gg.hostility = Math.min(100, gg.hostility + 12);
+      addLog(g, `${gg.name} is running hotter after ${s.name}'s arrest.`, 'warn');
+    }
+  }
   const wasCriminal = s.role === 'suspect' || s.warrant;
   if (!wasCriminal) {
     g.stats.wrongfulArrests++;

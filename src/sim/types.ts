@@ -98,6 +98,7 @@ export interface Civilian extends Armed {
   dog?: boolean;
   emote?: string;
   emoteUntil?: number;
+  gang?: number | null;
 }
 
 export type OfficerState =
@@ -131,6 +132,8 @@ export interface Officer extends Armed {
   holdPos: Pt | null;
   color: string;
   aiShoot: number; // cooldown for ai decisions
+  unit?: 'patrol' | 'swat';
+  armor?: number;  // incoming-damage multiplier (SWAT ~0.55)
 }
 
 export interface Vehicle {
@@ -157,7 +160,7 @@ export interface Vehicle {
 export type IncidentType =
   | 'noise' | 'suspicious' | 'traffic' | 'shoplift' | 'fight' | 'burglary'
   | 'robbery' | 'armed_robbery' | 'shots' | 'pursuit' | 'assault' | 'bank_robbery'
-  | 'shootout' | 'protest_event' | 'welfare';
+  | 'shootout' | 'protest_event' | 'welfare' | 'raid' | 'gang_attack';
 
 export type IncidentState = 'queued' | 'assigned' | 'onscene' | 'resolving' | 'resolved';
 
@@ -223,6 +226,43 @@ export interface Cheats {
 
 export interface Prop { kind: 'bench' | 'hydrant' | 'lamp'; x: number; y: number }
 
+export interface Gang {
+  id: number;
+  name: string;
+  color: string;
+  hood: number;
+  rect: { x: number; y: number; w: number; h: number }; // territory, tile coords
+  strongholdId: number;   // building id
+  hostility: number;      // 0..100 — how hard they press officers in territory
+  cleared: boolean;       // stronghold cleared by a raid
+}
+
+export interface Contract {
+  id: number;
+  kind: 'patrol' | 'crime' | 'response' | 'raid';
+  title: string;
+  desc: string;
+  hood: number;           // -1 if n/a
+  gang: number;           // -1 if n/a
+  target: number;         // patrol: game-min needed · crime: crime level to reach · response: calls to resolve
+  progress: number;
+  deadline: number;       // sim time
+  reward: number;
+  state: 'offered' | 'active' | 'done' | 'failed';
+  offeredUntil: number;
+}
+
+export interface SurplusOffer {
+  id: number;
+  kind: 'grant' | 'car' | 'carbines' | 'armor';
+  title: string;
+  desc: string;
+  cost: number;           // 0 = free
+  expires: number;
+}
+
+export interface CityRel { council: number; mayor: number }
+
 export interface World {
   seed: number;
   w: number; h: number;
@@ -233,6 +273,7 @@ export interface World {
   bankId: number;
   storeIds: number[];
   props: Prop[];
+  gangs: Gang[];
 }
 
 export interface Game {
@@ -257,6 +298,10 @@ export interface Game {
   protestUntil: number;
   protestHood: number;
   policy: Policy;
+  city: CityRel;
+  contracts: Contract[];
+  surplus: SurplusOffer[];
+  swat: boolean;          // SWAT team established
   notify: (text: string, cls: string, x?: number, y?: number) => void;
   sfx?: (type: string, x?: number, y?: number) => void;
   aim: { x: number; y: number } | null; // world-space aim point while directly controlling

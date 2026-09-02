@@ -1,5 +1,5 @@
 import { T, TILE } from './types';
-import type { World, Building, Neighborhood, Pt, BuildingKind } from './types';
+import type { World, Building, Neighborhood, Pt, BuildingKind, Gang } from './types';
 import { HOOD_NAMES, STORE_NAMES, SHOP_NAMES, BAR_NAMES, OFFICE_NAMES } from './data';
 
 export const GW = 96, GH = 72;
@@ -126,7 +126,7 @@ export function findPath(w: World, sx: number, sy: number, ex: number, ey: numbe
   gArr[si] = 0; fArr[si] = Math.abs(etx - stx) + Math.abs(ety - sty); fromArr[si] = -1;
   hpush(fArr, si);
   let iter = 0;
-  while (openH.length && iter++ < 9000) {
+  while (openH.length && iter++ < 22000) {
     const cur = hpop(fArr);
     if (cur === ei) {
       const path: Pt[] = [];
@@ -196,7 +196,7 @@ export function generateCity(seed: number): World {
   const w: World = {
     seed, w: GW, h: GH,
     tiles: new Uint8Array(GW * GH).fill(T.GRASS),
-    buildings: [], hoods: [], stationId: -1, bankId: -1, storeIds: [], props: [],
+    buildings: [], hoods: [], stationId: -1, bankId: -1, storeIds: [], props: [], gangs: [],
   };
 
   // neighborhoods (quadrants)
@@ -354,7 +354,40 @@ export function generateCity(seed: number): World {
     }
   }
 
+  // gang territories: a stronghold building + the blocks around it, in the two roughest hoods
+  const gangDefs = [
+    { name: 'Dockside 9', color: '#b03a3a', hood: 2 },
+    { name: 'Eastside Kings', color: '#3a7ab0', hood: 3 },
+  ];
+  for (const gd of gangDefs) {
+    const candidates = w.buildings.filter(b => b.hood === gd.hood &&
+      (b.kind === 'apartment' || b.kind === 'bar' || b.kind === 'house') &&
+      b.id !== w.stationId && b.id !== w.bankId);
+    if (!candidates.length) continue;
+    // biggest apartment block ("the projects") preferred
+    candidates.sort((a, b) => (b.kind === 'apartment' ? 1000 : 0) + b.w * b.h - ((a.kind === 'apartment' ? 1000 : 0) + a.w * a.h));
+    const sh = candidates[0];
+    const cx = sh.x + Math.floor(sh.w / 2), cy = sh.y + Math.floor(sh.h / 2);
+    w.gangs.push({
+      id: w.gangs.length, name: gd.name, color: gd.color, hood: gd.hood,
+      rect: {
+        x: Math.max(0, cx - 12), y: Math.max(0, cy - 10),
+        w: Math.min(24, GW - Math.max(0, cx - 12)), h: Math.min(20, GH - Math.max(0, cy - 10)),
+      },
+      strongholdId: sh.id, hostility: 35 + ri(0, 15), cleared: false,
+    });
+  }
+
   return w;
+}
+
+export function gangAt(w: World, x: number, y: number): Gang | null {
+  const tx = px2t(x), ty = px2t(y);
+  for (const gg of w.gangs) {
+    if (gg.cleared) continue;
+    if (tx >= gg.rect.x && tx < gg.rect.x + gg.rect.w && ty >= gg.rect.y && ty < gg.rect.y + gg.rect.h) return gg;
+  }
+  return null;
 }
 
 export function stationDoor(w: World): Pt {

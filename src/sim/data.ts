@@ -41,4 +41,5 @@ export const INCIDENT_TITLES: Record<string, string> = {
   robbery: 'Robbery', armed_robbery: 'Armed robbery', shots: 'Shots fired',
   pursuit: 'Pursuit', assault: 'Assault', bank_robbery: 'BANK ROBBERY',
   shootout: 'Shootout', protest_event: 'Crowd forming', welfare: 'Welfare check',
+  raid: 'STRONGHOLD RAID', gang_attack: 'Officers under attack',
 };
